@@ -1,5 +1,14 @@
 # Changelog
 
+## V0.0.2 — 2026-08-10 14:00
+### Changes
+- Added root `README.md`
+- Scoped the rebuild in `README.md` / `doc/wiki/Home.md`: NutriPal will be a web app for viewing/analyzing Google Health (formerly Fitbit) data from the desktop, with enhanced macro/micronutrient analysis and activity (running, workouts) vs. weight/food correlation. Building incrementally rather than all at once.
+
+### Planned (not yet implemented)
+- Decide tech stack for the new build
+- All application code (currently nothing exists beyond docs/scaffolding)
+
 ## V0.0.1 — 2026-08-10 13:00
 ### Changes
 - Fixed `.github/workflows/main.yml` (Auto Update Wiki): the wiki-repo push URL was malformed (`@://github.com` instead of `@github.com/`, and `{{ github.repository }}` missing its `$` so it was never interpolated), causing the push step to fail on every run
