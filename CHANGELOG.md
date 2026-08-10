@@ -1,5 +1,15 @@
 # Changelog
 
+## V0.0.3 — 2026-08-10 15:00
+### Changes
+- Decided tech stack: PHP + MySQL backend (JSON API) developed locally on XAMPP, React SPA frontend, targeting Bluehost shared hosting for eventual deployment (auth and env-based secrets designed in from the start, deployment itself deferred)
+- Added `doc/wiki/Architecture.md` documenting the stack decision and rationale
+- Expanded scope in `README.md` / `doc/wiki/Home.md`: added custom meal creation and fast repeat-meal logging (e.g. near-identical daily breakfast with minor tweaks) to the feature list
+
+### Planned (not yet implemented)
+- Scope and build the first slice of functionality
+- All application code (currently nothing exists beyond docs/scaffolding)
+
 ## V0.0.2 — 2026-08-10 14:00
 ### Changes
 - Added root `README.md`

@@ -7,6 +7,7 @@ NutriPal is a web app for accessing and analyzing personal health data pulled fr
 - Enhanced nutrition analysis — tracking additional macronutrients and micronutrients beyond what's provided out of the box
 - Deeper activity analysis — running, workouts, etc.
 - Correlating activity, food, and weight trends over time
+- Custom meal creation, plus fast logging of frequent/repeated meals (e.g. a near-identical daily breakfast) with quick minor adjustments rather than re-entering from scratch each time
 
 Development is being restarted from scratch; the current codebase is empty aside from documentation. Building incrementally, starting small rather than attempting the full feature set at once.
 
@@ -16,8 +17,9 @@ Development is being restarted from scratch; the current codebase is empty aside
 
 ## Status
 
-No app code exists yet at the project root. Next step: decide the tech stack for the new build.
+No app code exists yet at the project root. Tech stack has been decided (see [[Architecture]]); next step is scoping the first slice of functionality to build.
 
 ## Pages
 
 - [[Home]] — this page
+- [[Architecture]] — stack, hosting target, and rationale
