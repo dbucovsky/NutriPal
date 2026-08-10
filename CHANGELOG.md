@@ -1,5 +1,21 @@
 # Changelog
 
+## V0.0.5 — 2026-08-10 17:00
+### Changes
+- Added first PHP application code: `public/` (front-end entry points), `src/` (`GoogleOAuth`, `TokenStore`, `Env`)
+- Implemented the Google Health OAuth flow: `auth-login.php` redirects to Google's consent screen with the `googlehealth.nutrition.readonly` scope (`access_type=offline`, `prompt=consent` to get a refresh token); `auth-callback.php` verifies CSRF state, exchanges the auth code for tokens, and stores them
+- Token storage is a temporary local JSON file (`storage/google-tokens.json`, gitignored) until the MySQL schema is designed
+- Added `.env.example` / `.env` support via a small dependency-free `Env` loader (no Composer install needed for this)
+- Verified locally with PHP's built-in server (`php -S`): homepage loads without config, auth routes fail with a clear error when unconfigured, and the generated Google auth URL matches Google's documented format exactly
+
+### Known bugs (not yet fixed)
+- Stored Google Health OAuth credentials (`doc/credentials/google-health.md`) are a **Desktop app** client; a **Web application**-type client must be created in Google Cloud Console (with the real redirect URI) before this flow can be tested end-to-end with real credentials
+
+### Planned (not yet implemented)
+- Design MySQL schema and swap `TokenStore`'s JSON file for a database-backed store
+- Fetch and store actual nutrition data using the obtained access token
+- React frontend
+
 ## V0.0.4 — 2026-08-10 16:00
 ### Changes
 - Scoped first milestone: Google Health food data sync only (calories/nutrients), activity and weight sync deferred

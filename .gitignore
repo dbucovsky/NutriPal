@@ -10,3 +10,10 @@ doc/credentials/**
 .DS_Store
 Thumbs.db
 nutripal.code-workspace
+
+# PHP
+/vendor/
+.env
+
+# Runtime storage (tokens, etc. — temporary until MySQL replaces this)
+/storage/*.json
