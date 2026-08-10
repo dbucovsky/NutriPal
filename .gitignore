@@ -1,0 +1,12 @@
+# Reference-only archive (kept local-only, never pushed)
+doc/archive/
+doc/archive/**
+
+# Credentials (kept local-only, never pushed)
+doc/credentials/
+doc/credentials/**
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+nutripal.code-workspace
