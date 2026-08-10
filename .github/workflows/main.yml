@@ -1,0 +1,24 @@
+name: Auto Update Wiki
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'wiki/**' # Triggers only when files inside the wiki folder change
+
+jobs:
+  update-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Check out the main repository files
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Step 2: Push contents of the /wiki folder to the GitHub Wiki
+      - name: Sync to Wiki
+        uses: Andrew-Chen-Wang/github-wiki-action@v4
+        with:
+          path: 'wiki'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: 'Auto-updated wiki from main commit: ${{ github.sha }}'
