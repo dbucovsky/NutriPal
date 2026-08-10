@@ -1,5 +1,16 @@
 # Changelog
 
+## V0.0.6 — 2026-08-10 18:00
+### Changes
+- Created a **Web application**-type Google OAuth client (redirect URI `http://localhost:8080/auth-callback.php`) to replace the unusable Desktop-app client; recorded in `doc/credentials/google-health.md`
+- Wired real credentials into local `.env` (gitignored)
+- Ran the full OAuth flow end-to-end against real Google login: consent screen, callback, and token exchange all verified working; `storage/google-tokens.json` confirmed populated with `access_token`, `refresh_token`, and the correct `nutrition.readonly` scope
+
+### Planned (not yet implemented)
+- Design MySQL schema and swap `TokenStore`'s JSON file for a database-backed store
+- Fetch and store actual nutrition data using the obtained access token
+- React frontend
+
 ## V0.0.5 — 2026-08-10 17:00
 ### Changes
 - Added first PHP application code: `public/` (front-end entry points), `src/` (`GoogleOAuth`, `TokenStore`, `Env`)
