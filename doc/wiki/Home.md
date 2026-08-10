@@ -17,9 +17,10 @@ Development is being restarted from scratch; the current codebase is empty aside
 
 ## Status
 
-No app code exists yet at the project root. Tech stack has been decided (see [[Architecture]]); next step is scoping the first slice of functionality to build.
+No app code exists yet at the project root. Tech stack has been decided (see [[Architecture]]). First milestone: Google Health food data sync (calories/nutrients only) — see [[Data-Sync]].
 
 ## Pages
 
 - [[Home]] — this page
 - [[Architecture]] — stack, hosting target, and rationale
+- [[Data-Sync]] — food data sync strategy for the first milestone

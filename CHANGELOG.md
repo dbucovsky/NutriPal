@@ -1,5 +1,18 @@
 # Changelog
 
+## V0.0.4 — 2026-08-10 16:00
+### Changes
+- Scoped first milestone: Google Health food data sync only (calories/nutrients), activity and weight sync deferred
+- Added `doc/wiki/Data-Sync.md` documenting sync strategy: routine incremental sync reconciles (upserts) the last 7 days on every run to catch backfilled/edited entries, plus a separate manual full-resync option for anything older
+
+### Known bugs (not yet fixed)
+- Stored Google Health OAuth credentials (`doc/credentials/google-health.md`) are a **Desktop app** client; NutriPal is a PHP web app, so a **Web application**-type client with proper redirect URIs needs to be created before implementing the OAuth flow
+
+### Planned (not yet implemented)
+- Scaffold the PHP + MySQL + React project structure
+- Google Health OAuth flow (web application client) and food-data sync implementation
+- Local MySQL schema for food log entries
+
 ## V0.0.3 — 2026-08-10 15:00
 ### Changes
 - Decided tech stack: PHP + MySQL backend (JSON API) developed locally on XAMPP, React SPA frontend, targeting Bluehost shared hosting for eventual deployment (auth and env-based secrets designed in from the start, deployment itself deferred)
