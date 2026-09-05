@@ -17,3 +17,4 @@ nutripal.code-workspace
 
 # Runtime storage (tokens, etc. — temporary until MySQL replaces this)
 /storage/*.json
+/storage/debug-metrics/

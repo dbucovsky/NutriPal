@@ -1,5 +1,18 @@
 # Changelog
 
+## V0.0.9 — 2026-09-05 12:00
+### Changes
+- Expanded requested OAuth scope (`src/GoogleOAuth.php`) beyond nutrition-only to also cover `activity_and_fitness.readonly`, `health_metrics_and_measurements.readonly`, and `sleep.readonly` — decided to survey what's available across activity, heart rate/vitals, sleep, and weight/height before continuing further food-only work
+- Added `scripts/fetch-metrics-test.php`, an exploratory script that probes 18 candidate data types (steps, exercise, heart rate, sleep, weight, etc.) and reports which ones actually have data in this account, saving raw responses to `storage/debug-metrics/` (gitignored)
+- Documented the scope decision and survey approach in `doc/wiki/Data-Sync.md`
+- Ran the survey: real data found for steps, distance, active-minutes, active-zone-minutes, exercise, active-energy-burned, heart-rate, heart-rate-variability, daily-resting-heart-rate, sleep, weight, height (plus sparse data for oxygen-saturation and body-fat); no data for vo2-max/blood-glucose; `floors` and `total-calories` aren't queryable via the `list` method at all (only `reconcile`/`rollup`/`dailyRollup` — different API shape, deferred)
+
+### Planned (not yet implemented)
+- Next build target: **steps + exercise** (activity data, toward the activity/food/weight correlation goal)
+- Design MySQL schema based on the observed response shape(s)
+- Integrate fetch(es) into the actual app (currently standalone scripts) and persist to the database
+- React frontend
+
 ## V0.0.8 — 2026-08-10 20:00
 ### Changes
 - Added `scripts/fetch-nutrition-test.php`, an exploratory CLI script that fetches real `nutritionLog` data points from the Google Health API for the last N days (default 10)

@@ -11,7 +11,10 @@ final class GoogleOAuth
         private string $clientId,
         private string $clientSecret,
         private string $redirectUri,
-        private string $scope = 'https://www.googleapis.com/auth/googlehealth.nutrition.readonly'
+        private string $scope = 'https://www.googleapis.com/auth/googlehealth.nutrition.readonly '
+            . 'https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly '
+            . 'https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly '
+            . 'https://www.googleapis.com/auth/googlehealth.sleep.readonly'
     ) {
     }
 
