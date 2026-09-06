@@ -24,3 +24,5 @@ No app code exists yet at the project root. Tech stack has been decided (see [[A
 - [[Home]] — this page
 - [[Architecture]] — stack, hosting target, and rationale
 - [[Data-Sync]] — food data sync strategy for the first milestone
+- [[Database-Schema]] — MySQL schema, dual-source (API + Takeout) dedup strategy, Takeout export format notes
+- [[Database-Design-Patterns]] — general, project-agnostic schema patterns (naming, history/audit, ownership, dedup) reusable across other projects

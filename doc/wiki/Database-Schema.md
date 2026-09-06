@@ -1,0 +1,72 @@
+# Database Schema
+
+Defined in [`sql/schema.sql`](../../sql/schema.sql) (checkpoint — see status note below), with sample data in [`sql/sample_data.sql`](../../sql/sample_data.sql). General, project-agnostic schema patterns used throughout (naming, history/audit, ownership, dedup, non-destructive corrections) are documented separately in [[Database-Design-Patterns]] rather than repeated here — this page covers what's specific to NutriPal's own tables.
+
+**Status**: `food_log_entries`, `food_log_nutrients`, the general history+provenance pattern, multi-user/ownership infrastructure, and the `foods_db` family have all had a detailed table-by-table review pass and are considered final-for-now. `steps_readings`, `heart_rate_readings`, `weight_readings`, `exercise_sessions`, `sleep_sessions`/`sleep_stages` still carry their original pre-review column shapes (with the general cross-cutting patterns layered on mechanically) and haven't had their own detailed pass yet — expect changes there.
+
+## Two ingestion sources, one dataset
+
+NutriPal ingests the same underlying data two ways:
+- **`google_health_api`** — live incremental sync (last 7 days rolling, see [[Data-Sync]])
+- **`google_takeout`** — a bulk export file (Google Takeout → Google Health), used to (1) quickly initialize a new user with full history instead of paging through years of API calls, and (2) periodically re-check that the API sync hasn't silently missed anything
+
+Both sources write into the same tables, distinguished by `ingestion_source_id` (a lookup, not the raw `data_source` column — see below) plus a `fingerprint` for dedup (see [[Database-Design-Patterns]] for the general dedup mechanism). Two more values exist beyond the two sources themselves:
+- **`mixed`** — reserved specifically for a genuine structural conflict between the two sources for what identity-resolution determined is the same logical entry — e.g. the API reports a 7oz serving, Takeout reports 8oz, for what's otherwise clearly the same food log entry. Only for **time-of-consumption** and **quantity/serving-size** disagreements — never for nutrient values (that's the `SRC`/`FIX`/`MOD` mechanism instead) and never for one source simply filling in a field the other left blank (that's an ordinary upsert).
+- **`nutripal`** — the row was created directly in the app (the future custom/repeat meal logging feature), not synced from Google at all. Not named "manual" — Google's own `data_source` field already uses the value `MANUAL` for a different meaning (the user hand-entered data into the Fitbit/Google Health app itself), and reusing that word here would be confusing next to it.
+
+**`data_source` vs. `ingestion_source`** — easy to confuse, deliberately disambiguated: `data_source_id` (→ `lut_data_source`) is which app/device *Google Health itself* says recorded the entry (e.g. "Fitbit App," "Charge 5") — pass-through metadata from the source data. `ingestion_source_id` (→ `lut_ingestion_source`) is which of *NutriPal's own* ingestion pipelines wrote the row — our own bookkeeping, described above.
+
+**`api_uid`** — the live API's native ID for a row, when the API has touched it. Distinct from Takeout-native IDs, which have their own dedicated columns (`log_id` on `exercise_sessions`; `sleep_id`/`sleep_stage_id` on `sleep_sessions`/`sleep_stages`). Confirmed which Takeout categories actually carry a native ID: **nutrition, steps, heart rate, and weight Takeout files have no ID column at all** (verified against the readme field lists) and rely purely on the fingerprint; only exercise and sleep Takeout data carry stable native IDs. `api_uid` has its own unique key (`UNIQUE(user_id, api_uid)`) and takes priority over fingerprint matching during identity resolution — see [[Database-Design-Patterns]] for why (a food entry's logged time can be edited after the fact, which changes its fingerprint but not its `api_uid`).
+
+## Fingerprint composition
+
+Per table, the fields hashed into `fingerprint` (sha256, computed identically regardless of source):
+- `food_log_entries`: `start_time`, `end_time`, `food_name` (lowercased/trimmed), the **meal type's name** resolved through `lut_meal_type` (not its id — ids can differ across environments/seed order, the name is stable), `brand_name` (lowercased/trimmed, empty string if null). Nutrient values are excluded — float rounding differences between sources shouldn't break matching.
+- `steps_readings` / `heart_rate_readings` / `weight_readings`: `reading_time` + the reading's value (steps, bpm, or weight_grams respectively), compared at minute precision.
+- `exercise_sessions`: `log_id` when a native ID is available (Takeout's Fitbit `logId`); otherwise `start_time` + `activity_name` (lowercased) + `duration_ms`.
+- `sleep_sessions`: `sleep_id` when available (Takeout); otherwise `start_time` + `end_time`.
+- `sleep_stages`: dedup via `sleep_stage_id` directly (no fingerprint column) — Takeout is currently the only source of stage-level rows. Open item: a fingerprint would be needed if the API ever returns stage-level detail without a shared ID.
+- `foods_db`: `name`, `brand_name`, `dimension`, and `COALESCE(version, 0)` — lets the same food name exist multiple times (once per version) without colliding, while still deduping a true re-import of an identical version. Unique key is `(user_id, group_id, fingerprint)` — see the ownership model below.
+
+## Tables
+
+**Food log** (reviewed, final for now):
+- `food_log_entries` — one row per logged food event. `start_time`/`end_time` always differ by exactly 1 minute (confirmed against 6,234 of 6,235 real Takeout rows) — not a real duration, just how Google's interval-shaped data model represents a single moment. Kept as two columns to match Google's own model; any code creating new entries must follow the same convention. `energy_kcal`, `total_protein_g`, `total_carbohydrate_g`, `total_fat_g` are promoted to top-level columns (protein alongside carb/fat for macro symmetry, even though the live API only exposes carb/fat at its own top level — protein is buried in the nutrients array there, same as sodium/sugar/etc.). `is_energy_estimated` is set when Takeout-sourced rows have their energy computed from macros (4×protein + 4×carb + 9×fat) rather than reported directly, since Takeout's `nutrition_log.csv` has no energy field at all. `has_nutrient_overrides` is a cached flag (not computed on the fly) set whenever any `FIX`/`MOD` nutrient row exists, so a UI can flag "this has been enhanced" without scanning the nutrients table on every render.
+- `food_log_nutrients` — one row **per nutrient per value type** (up to 3: `SRC`/`FIX`/`MOD`, see [[Database-Design-Patterns]]) per entry, since both the nutrient set and whether it's been corrected vary per entry. `nutrient_id` → `lut_nutrient`, deliberately curated (a nutrient not already in the lookup is dropped at ingest time, not auto-added — see the design-patterns doc's "curated allowlist" note). `unit_id` → `unit_conversions`, the same single source of truth used for serving units, extended with milligram/microgram so nutrient-scale units don't need a separate concept.
+
+**Still open**: the linkage from `food_log_entries` to `foods_db` — which catalog food a logged entry came from, and what quantity — needed for "log this again." The unit half of this is resolved (`serving_unit_id` → `lut_serving_unit` → `unit_conversion_id`/`foods_db_custom_unit_id`); which specific `foods_db` row and the quantity multiplier are not yet designed.
+
+**Remaining original health-data tables** (not yet individually re-reviewed — expect changes):
+- `steps_readings`, `heart_rate_readings`, `weight_readings` — simple timestamped readings.
+- `exercise_sessions` — core fields as columns; heart-rate zones / active-zone-minutes breakdown / GPS kept in a `raw_details` JSON column rather than fully normalized (available for later use, not modeled as separate tables in V1).
+- `sleep_sessions` (with sleep score sub-scores folded in as columns, since they're effectively 1:1 with a session in practice) + `sleep_stages` (genuinely one-to-many, kept normalized for stage-duration trend analysis).
+
+**`foods_db` family** (reviewed, final for now) — the user's own + historically-encountered food catalog, motivated by how the user actually eats (mostly home-cooked, buying ingredients in bulk and eating them across several meals) and by the API not exposing any way to search Google's own food data — only what's already been logged is visible:
+- `foods_db` — nutrition always normalized per 100 units of the food's `dimension` (100g or 100mL), matching label convention, so scaling to whatever quantity/unit was actually used is always the same math. Three-tier ownership (universal / group / user) via `group_id`/`user_id`, and `version` for tracking that packaged foods' real nutrition can drift over time (different manufacturers/resellers/reformulations) — both patterns detailed in [[Database-Design-Patterns]].
+- `foods_db_custom_units` — per-food named units beyond the universal standard ones (e.g. "small/medium/large orange," "18in pie slice"), one of which can be flagged `is_default`. Tied to one specific `foods_db` row (one version) — not automatically shared across other versions of the same food.
+- `foods_db_nutrients` — same shape and `SRC`/`FIX`/`MOD` model as `food_log_nutrients`, for the catalog. Sets up a future enrichment workflow: a catalog food's supplementary nutrients (things Google never reports, e.g. specific amino acids) can eventually flow into a matched Google-sourced log entry — the matching logic itself is deferred to implementation time.
+- `foods_db_last_used` — per-`(user, food)` usage tracking, kept separate from `foods_db` to isolate high-churn writes. `score` is a bounded, self-decaying recency-weighted frequency (not a plain lifetime counter, which would fade too slowly once a food is abandoned after heavy use) — see [[Database-Design-Patterns]] for why, and the exact write-time decay algorithm (order matters: decay must be computed from the *old* `last_used_at` before it's overwritten).
+- `unit_conversions` — universal mass/volume unit conversions, shared by both `foods_db` and nutrient quantities.
+- `lut_serving_unit` — resolves a logged serving unit to either a standard `unit_conversions` row or a food-specific `foods_db_custom_units` row (see [[Database-Design-Patterns]]'s "resolving a could-be-one-of-several-tables reference" pattern).
+
+**Multi-user readiness** (schema shape only — no login/registration UX exists yet; the app still just operates as one hardcoded user): `users`, `groups`, `link_user_group` (membership + per-user group-priority ranking). Every user-owned table carries `user_id` directly, including child tables, and every uniqueness constraint is scoped per-user. Full rationale in [[Database-Design-Patterns]].
+
+## Google Takeout export format (observed, 2026-09-05)
+
+A Takeout "Google Health" export unpacks into several differently-shaped areas — this isn't one uniform format:
+
+- **`Physical Activity_GoogleData/`** — one folder of per-month CSVs per data type: `steps_YYYY-MM-DD.csv`, `heart_rate_YYYY-MM-DD.csv`, `distance_...`, etc. Each row is just `timestamp, value, data source`. `nutrition_log.csv` and `weight.csv` are exceptions — single all-history files, not split by month.
+  - Nutrition row: `start time, end time, brand name, food name, meal type, nutrients, data source` — nutrients arrive as one semicolon-delimited string (`"PROTEIN: 0.00 GRAM; SODIUM: 7.14 MILLIGRAM; ..."`), not an array like the API gives. No explicit calorie/energy field.
+  - Weight row: weight is in **grams**, not kg/lbs.
+- **`Global Export Data/exercise-*.json`** — legacy Fitbit-format exercise sessions, paginated across ~23 files. Richer than the live API's `exercise` type: includes `logId` (stable, usable as a natural key), heart-rate zones, active-zone-minutes breakdown, GPS/pace/distance, and tracker device info.
+- **`Health Fitness Data_GoogleData/UserSleeps.csv`, `UserSleepStages.csv`, `UserSleepScores.csv`** — sleep data, each with its own stable ID (`sleep_id`, `sleep_stage_id`, `sleep_score_id`) and UTC timestamps with separate UTC-offset columns.
+
+## Open items
+
+- `steps_readings`, `heart_rate_readings`, `weight_readings`, `exercise_sessions`, `sleep_sessions`/`sleep_stages` still need their own table-by-table review pass (the way `food_log_entries` had) — likely candidates: whether `activity_name`/`activity_type_id` on `exercise_sessions` deserves a `lut_activity_type` lookup, same reasoning as `data_source`/`stage_type`.
+- Whether the "drop if unmapped" ingest behavior (used for `lut_nutrient`) should also apply to `lut_meal_type`/`lut_data_source`/`lut_serving_unit` — some of those are required fields on a required parent row, unlike an optional per-nutrient child row.
+- `food_log_entries` ↔ `foods_db` linkage (which catalog food, what quantity) — see "Food log" above.
+- Upsert priority, `mixed`-conflict resolution/recording, and the fingerprint-can-miss-a-time-edit edge case (native-ID-before-fingerprint doesn't help when *neither* source has a native ID) — all deferred to when the import/sync code is actually written. Full detail in the working plan history.
+- `raw_details` JSON on `exercise_sessions` is intentionally unstructured for now; revisit if zone-level or GPS-level querying is needed later.
+- `APP_TIMEZONE` config needed for local-day bucketing in daily-aggregate queries — not yet added.
+- DB not yet created; `scripts/import-takeout.php` not yet built. See the note in `sql/schema.sql`'s header before running it (XAMPP/MySQL databases are created only with explicit confirmation, per project convention).
