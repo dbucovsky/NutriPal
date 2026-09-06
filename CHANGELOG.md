@@ -1,5 +1,10 @@
 # Changelog
 
+## V0.0.12 — 2026-09-06 16:00
+### Changes
+- Verified `sql/schema.sql` + `sql/sample_data.sql` by actually running them: loaded into throwaway databases (`nutripal_verify`/`nutripal_verify_hist`, never touching real `nutripal`), confirmed table/trigger counts, exercised the cross-schema history trigger (update + inspect the resulting hist row), the delete-block trigger, and FK enforcement — then dropped both throwaway databases.
+- **Bug found and fixed**: every `_hist` table's `valid_start_ts`/`valid_end_ts`/`created_ts` columns were `TIMESTAMP NOT NULL` with no explicit `DEFAULT`. MariaDB (this XAMPP install's config: `explicit_defaults_for_timestamp=0`, `NO_ZERO_DATE` in `sql_mode`) rejects that for any `TIMESTAMP NOT NULL` column beyond the first one in a table, since it can't fall back to its usual implicit zero-date default. Fixed by adding `DEFAULT CURRENT_TIMESTAMP` to all three columns across all 25 hist tables — harmless, since the trigger always supplies real values explicitly; this only satisfies MariaDB's DDL validation. Would have blocked schema creation entirely on first real use.
+
 ## V0.0.11 — 2026-09-06 15:00
 ### Changes
 - Designed the `food_log_entries` ↔ `foods_db` linkage: added nullable `food_id` (FK → `foods_db`) to `food_log_entries`, recording which catalog version an entry was logged from without live-joining for display (nutrition stays a logging-time snapshot, so re-versioning a catalog food never rewrites past logs). The quantity side needed no new column — `serving_amount`/`serving_unit_id` already resolve to a total gram/mL amount against `foods_db`'s per-100 nutrition.
