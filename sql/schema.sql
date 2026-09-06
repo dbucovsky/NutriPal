@@ -49,6 +49,35 @@
 -- user_id directly, and every uniqueness constraint is scoped per-user.
 --
 -- ============================================================================
+-- TWO SCHEMAS: `nutripal` (live data) + `nutripal_hist` (every _hist table)
+-- ============================================================================
+--
+-- Split so history — which grows much faster than live data — can be backed
+-- up, dumped, or eventually archived on its own cadence without touching the
+-- live schema. Every _hist CREATE TABLE below is schema-qualified
+-- (nutripal_hist.<table>_hist); main tables are created under the `nutripal`
+-- default (see USE below). Cross-schema DML/FKs work fine in MySQL as long as
+-- both schemas are on the same server (true locally and on Bluehost's shared
+-- server) — each BEFORE UPDATE trigger's INSERT into its _hist table is
+-- schema-qualified for exactly this reason (an unqualified name inside a
+-- trigger resolves to the trigger's OWN schema, i.e. `nutripal`, not
+-- `nutripal_hist`). No hist table declares a foreign key back to its main
+-- table (verified: none exist in this file), so this split needed no other
+-- structural change.
+--
+-- IMPORTANT — Bluehost naming: Bluehost's cPanel prefixes every database (and
+-- DB user) name with an account-specific prefix (e.g. `theshaf2_`). The hist
+-- schema name is baked literally into every trigger body below (raw SQL can't
+-- parameterize identifiers), so deploying to Bluehost requires first
+-- replacing every `nutripal_hist` occurrence in this file with the real
+-- prefixed name (e.g. `theshaf2_nutripal_hist`) — this is a manual, one-time
+-- find-and-replace step per deploy, not automated by anything yet.
+--
+-- ============================================================================
+
+CREATE DATABASE IF NOT EXISTS nutripal;
+CREATE DATABASE IF NOT EXISTS nutripal_hist;
+USE nutripal;
 
 -- ----------------------------------------------------------------------------
 -- Lookup tables
@@ -66,7 +95,7 @@ CREATE TABLE lut_status (
     UNIQUE KEY uq_lut_status_name (name)
 ) ENGINE=InnoDB;
 
-CREATE TABLE lut_status_hist (
+CREATE TABLE nutripal_hist.lut_status_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -93,7 +122,7 @@ CREATE TABLE lut_ingestion_source (
     UNIQUE KEY uq_lut_ingestion_source_name (name)
 ) ENGINE=InnoDB;
 
-CREATE TABLE lut_ingestion_source_hist (
+CREATE TABLE nutripal_hist.lut_ingestion_source_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -120,7 +149,7 @@ CREATE TABLE lut_nutrient_value_type (
     UNIQUE KEY uq_lut_nutrient_value_type_name (name)
 ) ENGINE=InnoDB;
 
-CREATE TABLE lut_nutrient_value_type_hist (
+CREATE TABLE nutripal_hist.lut_nutrient_value_type_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -147,7 +176,7 @@ CREATE TABLE lut_dimension (
     UNIQUE KEY uq_lut_dimension_name (name)
 ) ENGINE=InnoDB;
 
-CREATE TABLE lut_dimension_hist (
+CREATE TABLE nutripal_hist.lut_dimension_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -174,7 +203,7 @@ CREATE TABLE lut_sleep_stage_type (
     UNIQUE KEY uq_lut_sleep_stage_type_name (name)
 ) ENGINE=InnoDB;
 
-CREATE TABLE lut_sleep_stage_type_hist (
+CREATE TABLE nutripal_hist.lut_sleep_stage_type_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -201,7 +230,7 @@ CREATE TABLE lut_meal_type (
     UNIQUE KEY uq_lut_meal_type_name (name)
 ) ENGINE=InnoDB;
 
-CREATE TABLE lut_meal_type_hist (
+CREATE TABLE nutripal_hist.lut_meal_type_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -228,7 +257,7 @@ CREATE TABLE lut_data_source (
     UNIQUE KEY uq_lut_data_source_name (name)
 ) ENGINE=InnoDB;
 
-CREATE TABLE lut_data_source_hist (
+CREATE TABLE nutripal_hist.lut_data_source_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -259,7 +288,7 @@ CREATE TABLE lut_nutrient (
     UNIQUE KEY uq_lut_nutrient_name (name)
 ) ENGINE=InnoDB;
 
-CREATE TABLE lut_nutrient_hist (
+CREATE TABLE nutripal_hist.lut_nutrient_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -292,7 +321,7 @@ CREATE TABLE users (
     CONSTRAINT fk_users_status FOREIGN KEY (status_id) REFERENCES lut_status(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE users_hist (
+CREATE TABLE nutripal_hist.users_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -319,7 +348,7 @@ CREATE TABLE groups (
     CONSTRAINT fk_groups_status FOREIGN KEY (status_id) REFERENCES lut_status(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE groups_hist (
+CREATE TABLE nutripal_hist.groups_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -351,7 +380,7 @@ CREATE TABLE link_user_group (
     CONSTRAINT fk_link_user_group_status FOREIGN KEY (status_id) REFERENCES lut_status(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE link_user_group_hist (
+CREATE TABLE nutripal_hist.link_user_group_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     user_id BIGINT UNSIGNED NOT NULL,
@@ -386,7 +415,7 @@ CREATE TABLE unit_conversions (
     CONSTRAINT fk_unit_conversions_dimension FOREIGN KEY (dimension_id) REFERENCES lut_dimension(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE unit_conversions_hist (
+CREATE TABLE nutripal_hist.unit_conversions_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -449,7 +478,7 @@ CREATE TABLE foods_db (
     CONSTRAINT fk_foods_db_user FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE foods_db_hist (
+CREATE TABLE nutripal_hist.foods_db_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -493,7 +522,7 @@ CREATE TABLE foods_db_custom_units (
     CONSTRAINT fk_foods_db_custom_units_food FOREIGN KEY (food_id) REFERENCES foods_db(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE foods_db_custom_units_hist (
+CREATE TABLE nutripal_hist.foods_db_custom_units_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -530,7 +559,7 @@ CREATE TABLE lut_serving_unit (
     CONSTRAINT fk_lut_serving_unit_custom FOREIGN KEY (foods_db_custom_unit_id) REFERENCES foods_db_custom_units(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE lut_serving_unit_hist (
+CREATE TABLE nutripal_hist.lut_serving_unit_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -567,7 +596,7 @@ CREATE TABLE foods_db_nutrients (
     CONSTRAINT fk_foods_db_nutrients_value_type FOREIGN KEY (value_type_id) REFERENCES lut_nutrient_value_type(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE foods_db_nutrients_hist (
+CREATE TABLE nutripal_hist.foods_db_nutrients_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -594,22 +623,28 @@ CREATE TABLE foods_db_nutrients_hist (
 -- overwritten. `times_used` is a plain lifetime count, display-only, never
 -- used for ranking. Does not get a `link_` prefix despite connecting
 -- users/foods_db — it carries substantial data of its own, not a pure link.
+-- last_serving_amount/last_serving_unit_id: the quantity actually logged
+-- last time, cached purely to prefill "log again" — not used for ranking,
+-- and NULL until this food has been logged at least once with a serving.
 CREATE TABLE foods_db_last_used (
     user_id BIGINT UNSIGNED NOT NULL,
     food_id BIGINT UNSIGNED NOT NULL,
     last_used_at DATETIME NOT NULL,
     times_used INT UNSIGNED NOT NULL DEFAULT 0,
     score DECIMAL(10,4) NOT NULL DEFAULT 0,
+    last_serving_amount DECIMAL(8,2) NULL,
+    last_serving_unit_id BIGINT UNSIGNED NULL,
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
     PRIMARY KEY (user_id, food_id),
     CONSTRAINT fk_foods_db_last_used_user FOREIGN KEY (user_id) REFERENCES users(id),
-    CONSTRAINT fk_foods_db_last_used_food FOREIGN KEY (food_id) REFERENCES foods_db(id)
+    CONSTRAINT fk_foods_db_last_used_food FOREIGN KEY (food_id) REFERENCES foods_db(id),
+    CONSTRAINT fk_foods_db_last_used_serving_unit FOREIGN KEY (last_serving_unit_id) REFERENCES lut_serving_unit(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE foods_db_last_used_hist (
+CREATE TABLE nutripal_hist.foods_db_last_used_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     user_id BIGINT UNSIGNED NOT NULL,
@@ -619,6 +654,8 @@ CREATE TABLE foods_db_last_used_hist (
     last_used_at DATETIME NOT NULL,
     times_used INT UNSIGNED NOT NULL,
     score DECIMAL(10,4) NOT NULL,
+    last_serving_amount DECIMAL(8,2) NULL,
+    last_serving_unit_id BIGINT UNSIGNED NULL,
     created_ts TIMESTAMP NOT NULL,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
@@ -636,6 +673,16 @@ CREATE TABLE foods_db_last_used_hist (
 -- keeps import/export/comparison simple) rather than collapsing to one
 -- `consumed_at` column. Any code creating new entries must follow the same
 -- convention: end_time = start_time + 1 minute.
+--
+-- food_id (nullable): which foods_db row (a specific version) this entry was
+-- logged from, if any. Most Google-synced entries won't have one unless/until
+-- a future matching/enrichment pass links them. Nutrition here is always a
+-- snapshot resolved at logging time (via serving_amount/serving_unit_id
+-- against foods_db's per-100 values) — food_id is for traceability/"log
+-- again," never live-joined for display, so re-versioning a catalog food
+-- never retroactively changes past logs. App-level invariant (not
+-- DB-enforced): if serving_unit_id resolves to a foods_db_custom_units row,
+-- that row's own food_id must match this food_id.
 CREATE TABLE food_log_entries (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT UNSIGNED NOT NULL,
@@ -651,6 +698,7 @@ CREATE TABLE food_log_entries (
     total_fat_g DECIMAL(8,2) NULL,
     serving_amount DECIMAL(8,2) NULL,
     serving_unit_id BIGINT UNSIGNED NULL,
+    food_id BIGINT UNSIGNED NULL,
     data_source_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
@@ -663,14 +711,16 @@ CREATE TABLE food_log_entries (
     UNIQUE KEY uq_food_log_entries_fingerprint (user_id, fingerprint),
     UNIQUE KEY uq_food_log_entries_api_uid (user_id, api_uid),
     KEY idx_food_log_entries_start_time (user_id, start_time),
+    KEY idx_food_log_entries_food (food_id),
     CONSTRAINT fk_food_log_entries_user FOREIGN KEY (user_id) REFERENCES users(id),
     CONSTRAINT fk_food_log_entries_meal_type FOREIGN KEY (meal_type_id) REFERENCES lut_meal_type(id),
     CONSTRAINT fk_food_log_entries_serving_unit FOREIGN KEY (serving_unit_id) REFERENCES lut_serving_unit(id),
+    CONSTRAINT fk_food_log_entries_food FOREIGN KEY (food_id) REFERENCES foods_db(id),
     CONSTRAINT fk_food_log_entries_data_source FOREIGN KEY (data_source_id) REFERENCES lut_data_source(id),
     CONSTRAINT fk_food_log_entries_ingestion_source FOREIGN KEY (ingestion_source_id) REFERENCES lut_ingestion_source(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE food_log_entries_hist (
+CREATE TABLE nutripal_hist.food_log_entries_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -689,6 +739,7 @@ CREATE TABLE food_log_entries_hist (
     total_fat_g DECIMAL(8,2) NULL,
     serving_amount DECIMAL(8,2) NULL,
     serving_unit_id BIGINT UNSIGNED NULL,
+    food_id BIGINT UNSIGNED NULL,
     data_source_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
@@ -729,7 +780,7 @@ CREATE TABLE food_log_nutrients (
     CONSTRAINT fk_food_log_nutrients_value_type FOREIGN KEY (value_type_id) REFERENCES lut_nutrient_value_type(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE food_log_nutrients_hist (
+CREATE TABLE nutripal_hist.food_log_nutrients_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -776,7 +827,7 @@ CREATE TABLE steps_readings (
     CONSTRAINT fk_steps_readings_ingestion_source FOREIGN KEY (ingestion_source_id) REFERENCES lut_ingestion_source(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE steps_readings_hist (
+CREATE TABLE nutripal_hist.steps_readings_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -816,7 +867,7 @@ CREATE TABLE heart_rate_readings (
     CONSTRAINT fk_heart_rate_readings_ingestion_source FOREIGN KEY (ingestion_source_id) REFERENCES lut_ingestion_source(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE heart_rate_readings_hist (
+CREATE TABLE nutripal_hist.heart_rate_readings_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -856,7 +907,7 @@ CREATE TABLE weight_readings (
     CONSTRAINT fk_weight_readings_ingestion_source FOREIGN KEY (ingestion_source_id) REFERENCES lut_ingestion_source(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE weight_readings_hist (
+CREATE TABLE nutripal_hist.weight_readings_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -909,7 +960,7 @@ CREATE TABLE exercise_sessions (
     CONSTRAINT fk_exercise_sessions_ingestion_source FOREIGN KEY (ingestion_source_id) REFERENCES lut_ingestion_source(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE exercise_sessions_hist (
+CREATE TABLE nutripal_hist.exercise_sessions_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -974,7 +1025,7 @@ CREATE TABLE sleep_sessions (
     CONSTRAINT fk_sleep_sessions_ingestion_source FOREIGN KEY (ingestion_source_id) REFERENCES lut_ingestion_source(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE sleep_sessions_hist (
+CREATE TABLE nutripal_hist.sleep_sessions_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -1024,7 +1075,7 @@ CREATE TABLE sleep_stages (
     CONSTRAINT fk_sleep_stages_type FOREIGN KEY (stage_type_id) REFERENCES lut_sleep_stage_type(id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE sleep_stages_hist (
+CREATE TABLE nutripal_hist.sleep_stages_hist (
     id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     id BIGINT UNSIGNED NOT NULL,
@@ -1053,7 +1104,7 @@ CREATE TABLE sleep_stages_hist (
 DELIMITER $$
 
 CREATE TRIGGER trg_lut_status_bu BEFORE UPDATE ON lut_status FOR EACH ROW BEGIN
-    INSERT INTO lut_status_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.lut_status_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.description, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1064,7 +1115,7 @@ CREATE TRIGGER trg_lut_status_bd BEFORE DELETE ON lut_status FOR EACH ROW BEGIN
 END$$
 
 CREATE TRIGGER trg_lut_ingestion_source_bu BEFORE UPDATE ON lut_ingestion_source FOR EACH ROW BEGIN
-    INSERT INTO lut_ingestion_source_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.lut_ingestion_source_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.description, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1075,7 +1126,7 @@ CREATE TRIGGER trg_lut_ingestion_source_bd BEFORE DELETE ON lut_ingestion_source
 END$$
 
 CREATE TRIGGER trg_lut_nutrient_value_type_bu BEFORE UPDATE ON lut_nutrient_value_type FOR EACH ROW BEGIN
-    INSERT INTO lut_nutrient_value_type_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.lut_nutrient_value_type_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.description, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1086,7 +1137,7 @@ CREATE TRIGGER trg_lut_nutrient_value_type_bd BEFORE DELETE ON lut_nutrient_valu
 END$$
 
 CREATE TRIGGER trg_lut_dimension_bu BEFORE UPDATE ON lut_dimension FOR EACH ROW BEGIN
-    INSERT INTO lut_dimension_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.lut_dimension_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.description, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1097,7 +1148,7 @@ CREATE TRIGGER trg_lut_dimension_bd BEFORE DELETE ON lut_dimension FOR EACH ROW 
 END$$
 
 CREATE TRIGGER trg_lut_sleep_stage_type_bu BEFORE UPDATE ON lut_sleep_stage_type FOR EACH ROW BEGIN
-    INSERT INTO lut_sleep_stage_type_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.lut_sleep_stage_type_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.description, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1108,7 +1159,7 @@ CREATE TRIGGER trg_lut_sleep_stage_type_bd BEFORE DELETE ON lut_sleep_stage_type
 END$$
 
 CREATE TRIGGER trg_lut_meal_type_bu BEFORE UPDATE ON lut_meal_type FOR EACH ROW BEGIN
-    INSERT INTO lut_meal_type_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.lut_meal_type_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.description, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1119,7 +1170,7 @@ CREATE TRIGGER trg_lut_meal_type_bd BEFORE DELETE ON lut_meal_type FOR EACH ROW 
 END$$
 
 CREATE TRIGGER trg_lut_data_source_bu BEFORE UPDATE ON lut_data_source FOR EACH ROW BEGIN
-    INSERT INTO lut_data_source_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.lut_data_source_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.description, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1130,7 +1181,7 @@ CREATE TRIGGER trg_lut_data_source_bd BEFORE DELETE ON lut_data_source FOR EACH 
 END$$
 
 CREATE TRIGGER trg_lut_nutrient_bu BEFORE UPDATE ON lut_nutrient FOR EACH ROW BEGIN
-    INSERT INTO lut_nutrient_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.lut_nutrient_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.description, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1141,7 +1192,7 @@ CREATE TRIGGER trg_lut_nutrient_bd BEFORE DELETE ON lut_nutrient FOR EACH ROW BE
 END$$
 
 CREATE TRIGGER trg_users_bu BEFORE UPDATE ON users FOR EACH ROW BEGIN
-    INSERT INTO users_hist (id, valid_start_ts, valid_end_ts, email, name, status_id, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.users_hist (id, valid_start_ts, valid_end_ts, email, name, status_id, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.email, OLD.name, OLD.status_id, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1152,7 +1203,7 @@ CREATE TRIGGER trg_users_bd BEFORE DELETE ON users FOR EACH ROW BEGIN
 END$$
 
 CREATE TRIGGER trg_groups_bu BEFORE UPDATE ON groups FOR EACH ROW BEGIN
-    INSERT INTO groups_hist (id, valid_start_ts, valid_end_ts, name, status_id, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.groups_hist (id, valid_start_ts, valid_end_ts, name, status_id, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.status_id, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1163,7 +1214,7 @@ CREATE TRIGGER trg_groups_bd BEFORE DELETE ON groups FOR EACH ROW BEGIN
 END$$
 
 CREATE TRIGGER trg_link_user_group_bu BEFORE UPDATE ON link_user_group FOR EACH ROW BEGIN
-    INSERT INTO link_user_group_hist (user_id, group_id, valid_start_ts, valid_end_ts, priority, status_id, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.link_user_group_hist (user_id, group_id, valid_start_ts, valid_end_ts, priority, status_id, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.user_id, OLD.group_id, OLD.db_ts, NOW(), OLD.priority, OLD.status_id, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.user_id = OLD.user_id;
     SET NEW.group_id = OLD.group_id;
@@ -1175,7 +1226,7 @@ CREATE TRIGGER trg_link_user_group_bd BEFORE DELETE ON link_user_group FOR EACH 
 END$$
 
 CREATE TRIGGER trg_unit_conversions_bu BEFORE UPDATE ON unit_conversions FOR EACH ROW BEGIN
-    INSERT INTO unit_conversions_hist (id, valid_start_ts, valid_end_ts, name, dimension_id, factor_to_base, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.unit_conversions_hist (id, valid_start_ts, valid_end_ts, name, dimension_id, factor_to_base, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.dimension_id, OLD.factor_to_base, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1186,7 +1237,7 @@ CREATE TRIGGER trg_unit_conversions_bd BEFORE DELETE ON unit_conversions FOR EAC
 END$$
 
 CREATE TRIGGER trg_foods_db_bu BEFORE UPDATE ON foods_db FOR EACH ROW BEGIN
-    INSERT INTO foods_db_hist (id, valid_start_ts, valid_end_ts, name, brand_name, dimension_id, version, group_id, user_id, energy_kcal, is_energy_estimated, total_protein_g, total_carbohydrate_g, total_fat_g, notes, is_archived, has_nutrient_overrides, fingerprint, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.foods_db_hist (id, valid_start_ts, valid_end_ts, name, brand_name, dimension_id, version, group_id, user_id, energy_kcal, is_energy_estimated, total_protein_g, total_carbohydrate_g, total_fat_g, notes, is_archived, has_nutrient_overrides, fingerprint, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.brand_name, OLD.dimension_id, OLD.version, OLD.group_id, OLD.user_id, OLD.energy_kcal, OLD.is_energy_estimated, OLD.total_protein_g, OLD.total_carbohydrate_g, OLD.total_fat_g, OLD.notes, OLD.is_archived, OLD.has_nutrient_overrides, OLD.fingerprint, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1197,7 +1248,7 @@ CREATE TRIGGER trg_foods_db_bd BEFORE DELETE ON foods_db FOR EACH ROW BEGIN
 END$$
 
 CREATE TRIGGER trg_foods_db_custom_units_bu BEFORE UPDATE ON foods_db_custom_units FOR EACH ROW BEGIN
-    INSERT INTO foods_db_custom_units_hist (id, valid_start_ts, valid_end_ts, food_id, unit_name, equivalent_amount, is_default, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.foods_db_custom_units_hist (id, valid_start_ts, valid_end_ts, food_id, unit_name, equivalent_amount, is_default, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.food_id, OLD.unit_name, OLD.equivalent_amount, OLD.is_default, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1208,7 +1259,7 @@ CREATE TRIGGER trg_foods_db_custom_units_bd BEFORE DELETE ON foods_db_custom_uni
 END$$
 
 CREATE TRIGGER trg_lut_serving_unit_bu BEFORE UPDATE ON lut_serving_unit FOR EACH ROW BEGIN
-    INSERT INTO lut_serving_unit_hist (id, valid_start_ts, valid_end_ts, label, unit_conversion_id, foods_db_custom_unit_id, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.lut_serving_unit_hist (id, valid_start_ts, valid_end_ts, label, unit_conversion_id, foods_db_custom_unit_id, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.label, OLD.unit_conversion_id, OLD.foods_db_custom_unit_id, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1219,7 +1270,7 @@ CREATE TRIGGER trg_lut_serving_unit_bd BEFORE DELETE ON lut_serving_unit FOR EAC
 END$$
 
 CREATE TRIGGER trg_foods_db_nutrients_bu BEFORE UPDATE ON foods_db_nutrients FOR EACH ROW BEGIN
-    INSERT INTO foods_db_nutrients_hist (id, valid_start_ts, valid_end_ts, food_id, nutrient_id, quantity, unit_id, value_type_id, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.foods_db_nutrients_hist (id, valid_start_ts, valid_end_ts, food_id, nutrient_id, quantity, unit_id, value_type_id, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.food_id, OLD.nutrient_id, OLD.quantity, OLD.unit_id, OLD.value_type_id, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1230,8 +1281,8 @@ CREATE TRIGGER trg_foods_db_nutrients_bd BEFORE DELETE ON foods_db_nutrients FOR
 END$$
 
 CREATE TRIGGER trg_foods_db_last_used_bu BEFORE UPDATE ON foods_db_last_used FOR EACH ROW BEGIN
-    INSERT INTO foods_db_last_used_hist (user_id, food_id, valid_start_ts, valid_end_ts, last_used_at, times_used, score, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.user_id, OLD.food_id, OLD.db_ts, NOW(), OLD.last_used_at, OLD.times_used, OLD.score, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.foods_db_last_used_hist (user_id, food_id, valid_start_ts, valid_end_ts, last_used_at, times_used, score, last_serving_amount, last_serving_unit_id, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.user_id, OLD.food_id, OLD.db_ts, NOW(), OLD.last_used_at, OLD.times_used, OLD.score, OLD.last_serving_amount, OLD.last_serving_unit_id, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.user_id = OLD.user_id;
     SET NEW.food_id = OLD.food_id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1242,8 +1293,8 @@ CREATE TRIGGER trg_foods_db_last_used_bd BEFORE DELETE ON foods_db_last_used FOR
 END$$
 
 CREATE TRIGGER trg_food_log_entries_bu BEFORE UPDATE ON food_log_entries FOR EACH ROW BEGIN
-    INSERT INTO food_log_entries_hist (id, valid_start_ts, valid_end_ts, user_id, start_time, end_time, brand_name, food_name, meal_type_id, energy_kcal, is_energy_estimated, total_protein_g, total_carbohydrate_g, total_fat_g, serving_amount, serving_unit_id, data_source_id, ingestion_source_id, api_uid, has_nutrient_overrides, fingerprint, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.start_time, OLD.end_time, OLD.brand_name, OLD.food_name, OLD.meal_type_id, OLD.energy_kcal, OLD.is_energy_estimated, OLD.total_protein_g, OLD.total_carbohydrate_g, OLD.total_fat_g, OLD.serving_amount, OLD.serving_unit_id, OLD.data_source_id, OLD.ingestion_source_id, OLD.api_uid, OLD.has_nutrient_overrides, OLD.fingerprint, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.food_log_entries_hist (id, valid_start_ts, valid_end_ts, user_id, start_time, end_time, brand_name, food_name, meal_type_id, energy_kcal, is_energy_estimated, total_protein_g, total_carbohydrate_g, total_fat_g, serving_amount, serving_unit_id, food_id, data_source_id, ingestion_source_id, api_uid, has_nutrient_overrides, fingerprint, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.start_time, OLD.end_time, OLD.brand_name, OLD.food_name, OLD.meal_type_id, OLD.energy_kcal, OLD.is_energy_estimated, OLD.total_protein_g, OLD.total_carbohydrate_g, OLD.total_fat_g, OLD.serving_amount, OLD.serving_unit_id, OLD.food_id, OLD.data_source_id, OLD.ingestion_source_id, OLD.api_uid, OLD.has_nutrient_overrides, OLD.fingerprint, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();
@@ -1253,7 +1304,7 @@ CREATE TRIGGER trg_food_log_entries_bd BEFORE DELETE ON food_log_entries FOR EAC
 END$$
 
 CREATE TRIGGER trg_food_log_nutrients_bu BEFORE UPDATE ON food_log_nutrients FOR EACH ROW BEGIN
-    INSERT INTO food_log_nutrients_hist (id, valid_start_ts, valid_end_ts, user_id, food_log_entry_id, nutrient_id, quantity, unit_id, value_type_id, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.food_log_nutrients_hist (id, valid_start_ts, valid_end_ts, user_id, food_log_entry_id, nutrient_id, quantity, unit_id, value_type_id, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.food_log_entry_id, OLD.nutrient_id, OLD.quantity, OLD.unit_id, OLD.value_type_id, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1264,7 +1315,7 @@ CREATE TRIGGER trg_food_log_nutrients_bd BEFORE DELETE ON food_log_nutrients FOR
 END$$
 
 CREATE TRIGGER trg_steps_readings_bu BEFORE UPDATE ON steps_readings FOR EACH ROW BEGIN
-    INSERT INTO steps_readings_hist (id, valid_start_ts, valid_end_ts, user_id, reading_time, steps, data_source_id, ingestion_source_id, api_uid, fingerprint, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.steps_readings_hist (id, valid_start_ts, valid_end_ts, user_id, reading_time, steps, data_source_id, ingestion_source_id, api_uid, fingerprint, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.reading_time, OLD.steps, OLD.data_source_id, OLD.ingestion_source_id, OLD.api_uid, OLD.fingerprint, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1275,7 +1326,7 @@ CREATE TRIGGER trg_steps_readings_bd BEFORE DELETE ON steps_readings FOR EACH RO
 END$$
 
 CREATE TRIGGER trg_heart_rate_readings_bu BEFORE UPDATE ON heart_rate_readings FOR EACH ROW BEGIN
-    INSERT INTO heart_rate_readings_hist (id, valid_start_ts, valid_end_ts, user_id, reading_time, bpm, data_source_id, ingestion_source_id, api_uid, fingerprint, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.heart_rate_readings_hist (id, valid_start_ts, valid_end_ts, user_id, reading_time, bpm, data_source_id, ingestion_source_id, api_uid, fingerprint, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.reading_time, OLD.bpm, OLD.data_source_id, OLD.ingestion_source_id, OLD.api_uid, OLD.fingerprint, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1286,7 +1337,7 @@ CREATE TRIGGER trg_heart_rate_readings_bd BEFORE DELETE ON heart_rate_readings F
 END$$
 
 CREATE TRIGGER trg_weight_readings_bu BEFORE UPDATE ON weight_readings FOR EACH ROW BEGIN
-    INSERT INTO weight_readings_hist (id, valid_start_ts, valid_end_ts, user_id, reading_time, weight_grams, data_source_id, ingestion_source_id, api_uid, fingerprint, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.weight_readings_hist (id, valid_start_ts, valid_end_ts, user_id, reading_time, weight_grams, data_source_id, ingestion_source_id, api_uid, fingerprint, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.reading_time, OLD.weight_grams, OLD.data_source_id, OLD.ingestion_source_id, OLD.api_uid, OLD.fingerprint, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1297,7 +1348,7 @@ CREATE TRIGGER trg_weight_readings_bd BEFORE DELETE ON weight_readings FOR EACH 
 END$$
 
 CREATE TRIGGER trg_exercise_sessions_bu BEFORE UPDATE ON exercise_sessions FOR EACH ROW BEGIN
-    INSERT INTO exercise_sessions_hist (id, valid_start_ts, valid_end_ts, user_id, log_id, start_time, end_time, activity_name, activity_type_id, duration_ms, active_duration_ms, calories, distance, distance_unit, steps, average_heart_rate, device_name, data_source_id, ingestion_source_id, api_uid, fingerprint, raw_details, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.exercise_sessions_hist (id, valid_start_ts, valid_end_ts, user_id, log_id, start_time, end_time, activity_name, activity_type_id, duration_ms, active_duration_ms, calories, distance, distance_unit, steps, average_heart_rate, device_name, data_source_id, ingestion_source_id, api_uid, fingerprint, raw_details, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.log_id, OLD.start_time, OLD.end_time, OLD.activity_name, OLD.activity_type_id, OLD.duration_ms, OLD.active_duration_ms, OLD.calories, OLD.distance, OLD.distance_unit, OLD.steps, OLD.average_heart_rate, OLD.device_name, OLD.data_source_id, OLD.ingestion_source_id, OLD.api_uid, OLD.fingerprint, OLD.raw_details, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1308,7 +1359,7 @@ CREATE TRIGGER trg_exercise_sessions_bd BEFORE DELETE ON exercise_sessions FOR E
 END$$
 
 CREATE TRIGGER trg_sleep_sessions_bu BEFORE UPDATE ON sleep_sessions FOR EACH ROW BEGIN
-    INSERT INTO sleep_sessions_hist (id, valid_start_ts, valid_end_ts, user_id, sleep_id, sleep_type, start_time, end_time, minutes_in_sleep_period, minutes_asleep, minutes_awake, minutes_to_fall_asleep, minutes_after_wake_up, overall_score, duration_score, composition_score, revitalization_score, resting_heart_rate, data_source_id, ingestion_source_id, api_uid, fingerprint, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.sleep_sessions_hist (id, valid_start_ts, valid_end_ts, user_id, sleep_id, sleep_type, start_time, end_time, minutes_in_sleep_period, minutes_asleep, minutes_awake, minutes_to_fall_asleep, minutes_after_wake_up, overall_score, duration_score, composition_score, revitalization_score, resting_heart_rate, data_source_id, ingestion_source_id, api_uid, fingerprint, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.sleep_id, OLD.sleep_type, OLD.start_time, OLD.end_time, OLD.minutes_in_sleep_period, OLD.minutes_asleep, OLD.minutes_awake, OLD.minutes_to_fall_asleep, OLD.minutes_after_wake_up, OLD.overall_score, OLD.duration_score, OLD.composition_score, OLD.revitalization_score, OLD.resting_heart_rate, OLD.data_source_id, OLD.ingestion_source_id, OLD.api_uid, OLD.fingerprint, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
@@ -1319,7 +1370,7 @@ CREATE TRIGGER trg_sleep_sessions_bd BEFORE DELETE ON sleep_sessions FOR EACH RO
 END$$
 
 CREATE TRIGGER trg_sleep_stages_bu BEFORE UPDATE ON sleep_stages FOR EACH ROW BEGIN
-    INSERT INTO sleep_stages_hist (id, valid_start_ts, valid_end_ts, user_id, sleep_session_id, sleep_stage_id, stage_type_id, start_time, end_time, created_ts, changed_by, changed_by_user_id)
+    INSERT INTO nutripal_hist.sleep_stages_hist (id, valid_start_ts, valid_end_ts, user_id, sleep_session_id, sleep_stage_id, stage_type_id, start_time, end_time, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.sleep_session_id, OLD.sleep_stage_id, OLD.stage_type_id, OLD.start_time, OLD.end_time, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;

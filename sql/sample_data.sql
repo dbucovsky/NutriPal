@@ -13,6 +13,12 @@
 -- Fingerprints are computed inline with SHA2()/CONCAT_WS() to match the
 -- documented formula exactly (see doc/wiki/Database-Schema.md), rather than
 -- being pre-computed by hand.
+--
+-- All tables here are main-schema tables (`nutripal`) — nothing seeds
+-- `nutripal_hist` directly, since history rows only ever get written by the
+-- BEFORE UPDATE triggers themselves.
+
+USE nutripal;
 
 -- ----------------------------------------------------------------------------
 -- Lookups

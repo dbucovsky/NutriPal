@@ -56,6 +56,15 @@ Two columns capture *why* a row changed, not just *that* it did:
 
 Both are **explicit values the application always supplies on every insert/update** — not MySQL session variables. This matches a broader principle worth calling out: explicit function/statement parameters are easier to read, test, and trust than hidden connection-level state that something has to remember to set at the right time. A nice side effect: a write that doesn't supply `changed_by` (e.g. someone editing a row directly through a database GUI) naturally shows up as `changed_by = NULL` — which is exactly how you distinguish "the application did this" from "someone touched the database directly," with no extra logic required.
 
+### Optional: splitting history into its own schema
+
+Every `_hist` table can optionally live in a separate schema/database from its main table (e.g. `app` + `app_hist`) rather than alongside it. History tables grow much faster than the tables they shadow, so a separate schema lets it be backed up, dumped, or archived on its own cadence without touching live data — with no correctness cost:
+
+- MySQL supports cross-schema DML and foreign keys as long as both schemas live on the same server — true for a typical shared-hosting MySQL instance or a local dev server. A `BEFORE UPDATE` trigger on a main table can `INSERT INTO other_schema.some_table_hist (...)` without issue.
+- The insert stays inside the same transaction as the triggering write — MySQL transactions are connection-scoped, not schema-scoped, so there's no atomicity gap between a row's update and its history snapshot landing.
+- One catch: an *unqualified* table name inside a trigger body resolves to the trigger's **own** schema (the same schema as the table it's defined on), never the connection's active schema — so every cross-schema reference inside a trigger must be fully qualified (`other_schema.table_hist`), and that schema name ends up baked literally into the trigger's source. If the history schema's real name differs per environment (e.g. a hosting provider that prefixes all database names with an account-specific string), every trigger body needs that literal updated before deploying to that environment — a manual find-and-replace, not something raw SQL can parameterize.
+- This split works cleanly specifically because `_hist` tables never declare a foreign key back to their main table (per the pattern above, they just carry a copied `id` as a plain indexed column) — if they did, a cross-schema FK would need the same qualification treatment as the trigger inserts.
+
 ## Reserved sentinel rows, not `0` or `NULL`
 
 When a column needs to express "none" / "unowned" / "universal" (e.g. "this record isn't owned by any particular user"), use a real reserved row in the referenced table (conventionally `id = 1`) rather than a magic literal or `NULL`:

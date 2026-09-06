@@ -1,5 +1,20 @@
 # Changelog
 
+## V0.0.11 — 2026-09-06 15:00
+### Changes
+- Designed the `food_log_entries` ↔ `foods_db` linkage: added nullable `food_id` (FK → `foods_db`) to `food_log_entries`, recording which catalog version an entry was logged from without live-joining for display (nutrition stays a logging-time snapshot, so re-versioning a catalog food never rewrites past logs). The quantity side needed no new column — `serving_amount`/`serving_unit_id` already resolve to a total gram/mL amount against `foods_db`'s per-100 nutrition.
+- Added `last_serving_amount`/`last_serving_unit_id` to `foods_db_last_used`, caching the last quantity logged for a food so "log again" can prefill the same serving, not just identify the food.
+- Updated `sql/schema.sql` (both tables + their `_hist` tables and update triggers) and `doc/wiki/Database-Schema.md` accordingly; `sql/sample_data.sql` needed no change since it doesn't yet populate `foods_db`.
+- Split the schema into two databases: `nutripal` (live data) and `nutripal_hist` (every `_hist` audit table), so history can be backed up/archived on its own cadence. Every `_hist` table and every trigger's history-insert target is now schema-qualified. Documented as a general reusable pattern in `doc/wiki/Database-Design-Patterns.md`, and flagged clearly in `sql/schema.sql`'s header that Bluehost's account-specific database-name prefix (`theshaf2_`) must be substituted for `nutripal_hist` before deploying there, since the hist schema name is baked literally into every trigger body.
+
+### Planned (not yet implemented)
+- Finish the table-by-table schema review for `steps_readings`, `heart_rate_readings`, `weight_readings`, `exercise_sessions`, `sleep_sessions`/`sleep_stages`
+- Meal planning — logging an intended future meal, distinct from a consumed entry
+- Create the actual MySQL database and run `sql/schema.sql` (needs confirmation before touching the local database, per project convention)
+- Build `scripts/import-takeout.php` to parse an extracted Takeout export and load it into the schema
+- Build the live-API-to-database sync (currently the fetch scripts only write debug JSON, not the DB)
+- React frontend
+
 ## V0.0.10 — 2026-09-06 14:00
 ### Changes
 - Decided to support ingesting Google Takeout exports as a second data source alongside the live API — for fast new-user initialization (full history at once) and periodic completeness checks against the incremental API sync
