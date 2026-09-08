@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react'
 import { getFoodLog } from '../api'
-import { todayLocal } from '../dateUtils'
-import DateNav from './DateNav'
 
 const MEAL_ORDER = ['BREAKFAST', 'LUNCH', 'DINNER', 'SNACK', 'ANYTIME']
 const MEAL_LABELS = {
@@ -16,8 +14,7 @@ function macro(value, unit = 'g') {
   return value === null || value === undefined ? '—' : `${value}${unit}`
 }
 
-export default function FoodLog({ userId }) {
-  const [date, setDate] = useState(todayLocal())
+export default function FoodLog({ userId, date }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -43,8 +40,6 @@ export default function FoodLog({ userId }) {
 
   return (
     <div className="food-log">
-      <DateNav date={date} onChange={setDate} />
-
       {loading && <p>Loading…</p>}
       {error && <p className="login-error">{error}</p>}
 

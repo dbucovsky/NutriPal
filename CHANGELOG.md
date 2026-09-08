@@ -1,5 +1,12 @@
 # Changelog
 
+## V0.1.3 — 2026-09-08 19:15
+### Changes
+- **Shared date across tabs**: the date is now lifted up to `App.jsx` and rendered once above the tab switcher, instead of each page (Food/Heart Rate/Sleep/Exercise) keeping its own independent date state — switching tabs now keeps the same day selected rather than each page silently resetting to today.
+- **Real date picker instead of prev/next arrows**: `DateNav.jsx` now shows a button formatted as "Weekday DD-MMM-YYYY" (e.g. "Tuesday 08-Sep-2026") that opens the browser's native date picker (`input.showPicker()`) when clicked, backed by a visually-hidden real `<input type="date">` so arbitrary dates can be entered directly, not just stepped one day at a time.
+- **Fixed a real bug: sleep stages were grouped by type instead of shown in chronological order.** `sleep.php`'s stage query used `GROUP BY stage_type` with `SUM()`, which merged every LIGHT segment (or DEEP, REM, etc.) across the whole night into one total — losing the actual sequence of sleep cycles. A real night's sleep normally cycles through stages many times (confirmed against real data: one session had 49 individual segments merged down to just 4 stage blocks). Fixed to return segments in chronological order (`ORDER BY start_time`, no grouping) for the stage bar, with per-type totals computed separately in PHP for the legend. Verified: the same real session now renders as a genuine hypnogram-style sequence instead of four solid blocks.
+- Removed `dateUtils.js`'s now-unused `shiftDate()` (no longer needed without prev/next arrows), replaced with `formatDisplayDate()`.
+
 ## V0.1.2 — 2026-09-08 18:45
 ### Changes
 - The Heart Rate chart now overlays sleep (blue) and exercise (orange) periods as shaded background bands directly on the bpm timeline, so correlations (a heart-rate spike during a walk, the overnight low during sleep) are visible at a glance — verified against real data: both exercise bands lined up exactly with the two heart-rate spikes on a real day, and the sleep band lined up with the overnight low.

@@ -1,14 +1,12 @@
 import { useEffect, useState } from 'react'
 import { getExercise } from '../api'
-import { todayLocal, formatLocalTime } from '../dateUtils'
-import DateNav from './DateNav'
+import { formatLocalTime } from '../dateUtils'
 
 function stat(value, unit = '') {
   return value === null || value === undefined ? '—' : `${value}${unit}`
 }
 
-export default function Exercise({ userId }) {
-  const [date, setDate] = useState(todayLocal())
+export default function Exercise({ userId, date }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -34,8 +32,6 @@ export default function Exercise({ userId }) {
 
   return (
     <div className="exercise">
-      <DateNav date={date} onChange={setDate} />
-
       {loading && <p>Loading…</p>}
       {error && <p className="login-error">{error}</p>}
 

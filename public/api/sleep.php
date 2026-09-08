@@ -42,12 +42,18 @@ $sessionsStmt = $pdo->prepare(
 $sessionsStmt->execute([$userId, $dayStart, $dayEnd]);
 $sessionRows = $sessionsStmt->fetchAll(PDO::FETCH_ASSOC);
 
+// Individual segments in chronological order — NOT grouped/summed by
+// stage type. A real night cycles through stages many times (light ->
+// deep -> light -> rem -> ...), so summing "all LIGHT time" into one
+// bucket would discard that real sequence; the frontend renders these
+// in order to show the actual progression through the night, and
+// separately totals them per type for the legend.
 $stageStmt = $pdo->prepare(
-    "SELECT stt.name AS stage_type, SUM(TIMESTAMPDIFF(SECOND, ss.start_time, ss.end_time)) AS seconds
+    "SELECT stt.name AS stage_type, ss.start_time, ss.end_time
      FROM sleep_stages ss
      JOIN lut_sleep_stage_type stt ON stt.id = ss.stage_type_id
      WHERE ss.sleep_session_id = ?
-     GROUP BY stt.name"
+     ORDER BY ss.start_time"
 );
 
 $sessions = [];
@@ -56,11 +62,18 @@ foreach ($sessionRows as $row) {
 
     $stageStmt->execute([$row['id']]);
     $stages = [];
+    $totalsByType = [];
     foreach ($stageStmt as $stageRow) {
+        $minutes = (int) round((strtotime($stageRow['end_time']) - strtotime($stageRow['start_time'])) / 60);
         $stages[] = [
             'stage_type' => $stageRow['stage_type'],
-            'minutes' => (int) round(((int) $stageRow['seconds']) / 60),
+            'minutes' => $minutes,
         ];
+        $totalsByType[$stageRow['stage_type']] = ($totalsByType[$stageRow['stage_type']] ?? 0) + $minutes;
+    }
+    $stageTotals = [];
+    foreach ($totalsByType as $stageType => $minutes) {
+        $stageTotals[] = ['stage_type' => $stageType, 'minutes' => $minutes];
     }
 
     $sessions[] = [
@@ -71,6 +84,7 @@ foreach ($sessionRows as $row) {
         'sleep_type' => $row['sleep_type'],
         'main_sleep' => $row['main_sleep'] !== null ? (bool) $row['main_sleep'] : null,
         'stages' => $stages,
+        'stage_totals' => $stageTotals,
     ];
 }
 

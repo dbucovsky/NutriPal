@@ -3,12 +3,21 @@ export function todayLocal() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-export function shiftDate(dateStr, days) {
-  // Anchor at UTC noon so adding/subtracting a day never lands on a
-  // different calendar date due to a DST transition.
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const MONTHS = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+]
+
+// "Tuesday 08-Sep-2026" - anchored at UTC noon so this never shifts to an
+// adjacent calendar date due to a DST transition or the browser's own
+// timezone (dateStr is a plain YYYY-MM-DD with no time/zone of its own).
+export function formatDisplayDate(dateStr) {
   const d = new Date(`${dateStr}T12:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + days)
-  return d.toISOString().slice(0, 10)
+  const weekday = WEEKDAYS[d.getUTCDay()]
+  const day = String(d.getUTCDate()).padStart(2, '0')
+  const month = MONTHS[d.getUTCMonth()]
+  const year = d.getUTCFullYear()
+  return `${weekday} ${day}-${month}-${year}`
 }
 
 // API endpoints return UTC datetime strings with no 'Z' suffix (e.g.

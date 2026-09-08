@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getSleep } from '../api'
-import { todayLocal, formatLocalTime } from '../dateUtils'
-import DateNav from './DateNav'
+import { formatLocalTime } from '../dateUtils'
 
 const STAGE_COLORS = {
   AWAKE: '#d9822b',
@@ -19,8 +18,7 @@ function formatDuration(minutes) {
   return `${h}h ${m}m`
 }
 
-export default function Sleep({ userId }) {
-  const [date, setDate] = useState(todayLocal())
+export default function Sleep({ userId, date }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -46,7 +44,6 @@ export default function Sleep({ userId }) {
 
   return (
     <div className="sleep">
-      <DateNav date={date} onChange={setDate} />
       <p className="page-note">Showing sleep that ended on this day.</p>
 
       {loading && <p>Loading…</p>}
@@ -57,7 +54,8 @@ export default function Sleep({ userId }) {
           {data.sessions.length === 0 && <p>No sleep logged for this day.</p>}
 
           {data.sessions.map((session) => {
-            const totalMinutes = session.stages.reduce((sum, s) => sum + s.minutes, 0) || session.duration_minutes
+            const totalMinutes =
+              session.stage_totals.reduce((sum, s) => sum + s.minutes, 0) || session.duration_minutes
             return (
               <section key={session.id} className="sleep-session">
                 <div className="sleep-session-header">
@@ -71,10 +69,13 @@ export default function Sleep({ userId }) {
 
                 {session.stages.length > 0 && (
                   <>
+                    {/* Segments in chronological order (not merged by type) so
+                        the bar shows the actual progression through the
+                        night's sleep cycles, not just total time per stage. */}
                     <div className="stage-bar">
-                      {session.stages.map((s) => (
+                      {session.stages.map((s, i) => (
                         <div
-                          key={s.stage_type}
+                          key={i}
                           className="stage-segment"
                           style={{
                             width: `${(s.minutes / totalMinutes) * 100}%`,
@@ -85,7 +86,7 @@ export default function Sleep({ userId }) {
                       ))}
                     </div>
                     <div className="stage-legend">
-                      {session.stages.map((s) => (
+                      {session.stage_totals.map((s) => (
                         <span key={s.stage_type} className="stage-legend-item">
                           <span
                             className="stage-swatch"

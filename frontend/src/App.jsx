@@ -4,6 +4,8 @@ import FoodLog from './components/FoodLog'
 import HeartRate from './components/HeartRate'
 import Sleep from './components/Sleep'
 import Exercise from './components/Exercise'
+import DateNav from './components/DateNav'
+import { todayLocal } from './dateUtils'
 import './App.css'
 
 const STORAGE_KEY = 'nutripal.currentUser'
@@ -27,6 +29,9 @@ function loadStoredUser() {
 function App() {
   const [currentUser, setCurrentUser] = useState(loadStoredUser)
   const [activeTab, setActiveTab] = useState(TABS[0].key)
+  // Shared across every tab, so switching tabs keeps the same day selected
+  // rather than each page defaulting back to today independently.
+  const [date, setDate] = useState(todayLocal())
 
   function handleLogin(user) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(user))
@@ -51,6 +56,8 @@ function App() {
         <button onClick={handleLogout}>Log out</button>
       </header>
 
+      <DateNav date={date} onChange={setDate} />
+
       <nav className="tab-nav">
         {TABS.map((tab) => (
           <button
@@ -63,7 +70,7 @@ function App() {
         ))}
       </nav>
 
-      <Active userId={currentUser.id} />
+      <Active userId={currentUser.id} date={date} />
     </div>
   )
 }

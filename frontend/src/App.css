@@ -83,20 +83,40 @@
 }
 
 .date-nav {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 16px;
   margin-bottom: 16px;
 }
 
-.date-nav h2 {
-  margin: 0;
+.date-display {
+  font-size: 1.5rem;
+  font-weight: 700;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: 4px;
 }
 
-.date-nav button {
-  font-size: 1.1rem;
-  padding: 4px 12px;
+.date-display:hover {
+  background: var(--border);
+}
+
+/* The real <input type="date"> stays in the DOM (so it can be focused and
+   opened via showPicker()) but is visually replaced by .date-display,
+   which shows the app's own "Weekday DD-MMM-YYYY" format instead of
+   whatever the browser/OS would otherwise render. */
+.date-input-hidden {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: none;
+  pointer-events: none;
 }
 
 .meal-section {

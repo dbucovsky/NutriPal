@@ -9,8 +9,6 @@ import {
 import annotationPlugin from 'chartjs-plugin-annotation'
 import { Line } from 'react-chartjs-2'
 import { getHeartRate } from '../api'
-import { todayLocal } from '../dateUtils'
-import DateNav from './DateNav'
 
 ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, annotationPlugin)
 
@@ -41,8 +39,7 @@ function periodsToAnnotations(periods, color, prefix) {
   return annotations
 }
 
-export default function HeartRate({ userId }) {
-  const [date, setDate] = useState(todayLocal())
+export default function HeartRate({ userId, date }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -104,8 +101,6 @@ export default function HeartRate({ userId }) {
 
   return (
     <div className="heart-rate">
-      <DateNav date={date} onChange={setDate} />
-
       {loading && <p>Loading…</p>}
       {error && <p className="login-error">{error}</p>}
 
