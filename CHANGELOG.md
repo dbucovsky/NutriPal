@@ -1,5 +1,11 @@
 # Changelog
 
+## V0.0.15 — 2026-09-08 12:00
+### Changes
+- Added `scripts/fetch-recent-compare.php`, an exploratory script that pulls the last N days of every relevant data type from the live Google Health API and writes each to its own temp JSON file (not the database), to cross-check against what's already in the DB from the Health Connect bulk import.
+- **Cross-source comparison, 10-day window**: nutrition, HRV, exercise, and sleep counts matched the DB exactly per day once both sides were bucketed by the same local calendar day (the API returns local civil dates; comparing against the DB's raw UTC dates made a day look "missing" that wasn't — a bucketing artifact, not a data gap). Steps/heart-rate matched almost exactly, with the handful of day-level discrepancies consistent with the already-documented multi-device step overlap. Found one genuine (not artifact) discrepancy: a Health-Connect-sourced weight reading on one date with no corresponding entry in the live API's history for the same date.
+- **Major finding**: the live API's `nutrition-log` data does not have the "quantity problem" that drove this session's Health Connect fix — every entry checked included a real `serving` field (amount + human unit, e.g. "2 oz") and a link to a canonical `food` resource carrying true gram-conversion multipliers per unit. Health Connect has neither. Recorded as a project memory (`google_health_api_food_data_quality`) since it changes the best fix path for the placeholder "reported serving" units once the live-API sync is built — likely no manual correction or external reference database needed for foods the API has already seen.
+
 ## V0.0.14 — 2026-09-08 10:00
 ### Changes
 - Created the real `nutripal`/`nutripal_hist` databases for the first time and added `sql/init_lookups.sql`, a canonical reference-data initialization script (sentinels, units, and every small-closed-vocabulary lookup) distinct from the illustrative `sql/sample_data.sql`. Added `src/Database.php` (minimal PDO connection helper) and `DB_HOST`/`DB_NAME`/`DB_USER`/`DB_PASS` to `.env`/`.env.example`.
