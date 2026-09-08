@@ -1,5 +1,30 @@
 # Changelog
 
+## V0.0.13 — 2026-09-07 22:00
+### Changes
+- Completed the table-by-table schema review for every remaining health-data table (`steps_readings`, `heart_rate_readings`, `measurements` [weight/height/etc.], `exercise_sessions`, `sleep_sessions`/`sleep_stages`), grounded in real API responses and a direct inspection of the real Takeout export zip rather than assumptions — every change below was driven by an actual data-shape finding, verified against a live throwaway MariaDB database after each table.
+- **New tables discovered via real data, not originally modeled**: `heart_rate_variability_readings` and `daily_resting_heart_rate` (distinct metrics from continuous bpm, confirmed via the live API); `lut_recording_method` (a genuinely new cross-cutting concept — *how* a reading was captured, e.g. `ACTIVELY_MEASURED`/`MANUAL`/`DERIVED` — present on every metric checked, added to steps/heart-rate/HRV/resting-HR/measurements/exercise/sleep); `lut_activity_type` (resolving Takeout's numeric Fitbit activity codes and the API's string `exerciseType` into one canonical vocabulary); `lut_sleep_type` (`CLASSIC`/`STAGES`).
+- **`weight_readings` and `height_readings` (height also newly added) merged into a single generic `measurements` table** (`measurement_type_id`/`value`/`unit_id`, per the "generic characteristic/value/unit table" pattern also documented in `doc/wiki/Database-Design-Patterns.md`) — extensible to future body metrics like blood pressure or body fat % without new tables. `unit_conversions`/`lut_dimension` extended with length/pressure/ratio dimensions to support it.
+- **Real bugs caught and fixed**: sleep score columns (`overall_score` etc.) were `TINYINT UNSIGNED` but real Takeout values are floats and use `-1` as a "not computed" sentinel — neither fits an unsigned integer; changed to `DECIMAL(6,2)` with `-1` translated to `NULL` at ingest. `sleep_stages` had no `fingerprint`/`ingestion_source_id` at all — confirmed via real data that the live API returns stage-level detail with no native ID, meaning API-sourced stages had no dedup mechanism whatsoever; fixed.
+- **Removed a redundant column**: `exercise_sessions.device_name` duplicated `data_source_id` (confirmed both sources report exactly one "which device" concept).
+- **Fixed free-text units**: `exercise_sessions.distance_unit` → `distance_unit_id` (`unit_conversions`-backed) — confirmed Takeout genuinely varies distance units (miles observed) while the API always reports fixed millimeters.
+- Added `food_log_entries.food_id` (nullable FK → `foods_db`) and `foods_db_last_used.last_serving_amount`/`last_serving_unit_id`, closing the previously-open `food_log_entries` ↔ `foods_db` linkage gap.
+- Split the schema into two databases (`nutripal` + `nutripal_hist`) so audit history can be backed up/archived independently of live data; documented the Bluehost account-prefix deploy caveat.
+- Corrected stale documentation: Takeout's `UserSleeps`/`UserSleepStages`/`UserSleepScores` files are actually split into several multi-year-range CSVs, not single all-history files as previously documented; discovered a second, richer legacy Fitbit-format sleep export (`Global Export Data/sleep-*.json`) and several unreviewed sleep-adjacent files (sleep profile, a second sleep-score source, sleep temperature, respiratory rate).
+- Every change re-verified end-to-end against a throwaway MariaDB database (insert/update/delete-block/FK enforcement), never touching the real `nutripal` database.
+
+### Known bugs (not yet fixed)
+- Multi-device step overlap can double-count daily step totals if summed naively — deliberately deferred to application/aggregation logic (see `doc/wiki/Database-Schema.md` Open Items), not a schema gap.
+
+### Planned (not yet implemented)
+- Mapping raw activity-type codes (Fitbit numeric IDs, API string enum) into canonical `lut_activity_type` rows — real reference-data work, deferred to ingest-time implementation
+- Deciding which raw Takeout sleep format the importer will parse, and reviewing the newly-discovered sleep-adjacent Takeout files
+- Create the actual MySQL database and run `sql/schema.sql` (needs confirmation before touching the local database, per project convention)
+- Build `scripts/import-takeout.php` to parse an extracted Takeout export and load it into the schema
+- Build the live-API-to-database sync (currently the fetch scripts only write debug JSON, not the DB)
+- Meal planning — logging an intended future meal, distinct from a consumed entry
+- React frontend
+
 ## V0.0.12 — 2026-09-06 16:00
 ### Changes
 - Verified `sql/schema.sql` + `sql/sample_data.sql` by actually running them: loaded into throwaway databases (`nutripal_verify`/`nutripal_verify_hist`, never touching real `nutripal`), confirmed table/trigger counts, exercised the cross-schema history trigger (update + inspect the resulting hist row), the delete-block trigger, and FK enforcement — then dropped both throwaway databases.

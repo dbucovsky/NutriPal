@@ -99,6 +99,18 @@ When the same table can be populated from more than one independent source (e.g.
 
 **A dedicated "genuine conflict" value**, distinct from either source's own value, for when two sources actively disagree on a fact for what's otherwise clearly the same record (e.g. one reports a slightly different quantity than the other) — not for one source merely filling in a gap the other left blank (that's an ordinary upsert), and not for values that get corrected via the non-destructive pattern below.
 
+**Multiple independent sources reporting the same real-world event doesn't mean every source is telling the whole story.** Two devices tracking the same activity (a wearable and a phone both counting steps) can each pass fingerprint dedup internally while still double-counting when naively summed together — the fingerprint prevents *duplicate ingestion*, not *overlapping measurement*. When a metric can plausibly be measured by more than one concurrent device/source, decide explicitly (even if the decision is deferred to application logic) which source is authoritative for aggregation, rather than assuming dedup alone makes summing safe.
+
+## Generic characteristic/value/unit tables for extensible metrics
+
+When a family of related, same-shaped point-in-time facts is likely to grow over time (new body measurements, new nutrients, new sensor types), model it as one table with `characteristic_id` (a lookup), `value`, and `unit_id`, rather than one table per fact. Adding a new characteristic becomes a new lookup row, not a schema migration. Concretely: `quantity`/`nutrient_id`/`unit_id` on a nutrient-tracking table, or `value`/`measurement_type_id`/`unit_id` on a body-measurement table, both follow this shape.
+
+Tradeoffs worth being explicit about:
+- **A multi-value fact (e.g. a blood pressure reading, which is really two numbers) becomes multiple rows sharing an identifying key** (like a timestamp), not one row with two value columns — the app pairs them back together by matching that shared key. This trades a wider row for a table that never needs a new column when a new paired metric shows up.
+- **The fingerprint (or other identity key) used for dedup must include the characteristic**, not just the timestamp/value — two different characteristics can legitimately share the same point in time (see the blood-pressure example above), and omitting the characteristic from the identity key causes a silent, incorrect collision.
+- **Scope the generalization to genuinely similar facts.** Don't fold in data with a fundamentally different shape (a continuous high-frequency sensor stream, a multi-stage session) just because it's superficially "a number with a unit" — those need their own specialized tables (their dedup, volume, and query patterns differ too much to share one generic table cleanly).
+- A `unit_id` column is only worth adding if the surrounding units table (see "single source of truth for units," implied throughout this doc) already generalizes across the needed dimensions (mass, volume, length, etc.) — extending that table's lookup dimension is easier than inventing a second, parallel unit concept just for the new characteristic family.
+
 ## Non-destructive value correction (`SRC` / `FIX` / `MOD`)
 
 When a sourced value sometimes needs correcting or supplementing — without ever destroying what the source actually reported, and without needing a vague "estimated" boolean bolted onto a single column — model up to three rows per (record, field) pair, tagged by kind:
