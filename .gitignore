@@ -18,3 +18,11 @@ nutripal.code-workspace
 # Runtime storage (tokens, etc. — temporary until MySQL replaces this)
 /storage/*.json
 /storage/debug-metrics/
+
+# Import logs contain real personal health data (food names, timestamps,
+# weights, etc.) — never committed.
+/storage/import-logs/
+
+# Real personal data exports (Takeout zips, Health Connect export) used to
+# test the importers against real data — never committed.
+/ref/

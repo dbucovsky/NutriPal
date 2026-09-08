@@ -1,11 +1,17 @@
--- NutriPal database schema (V1 checkpoint)
+-- NutriPal database schema (V2 checkpoint)
 --
--- CHECKPOINT, NOT FINAL — but every table has now had its own detailed
--- table-by-table review pass grounded in real API/Takeout data (food,
--- steps, heart rate + HRV + resting HR, weight/height/measurements,
--- exercise, sleep). Still open: the deferred cross-source reconciliation
--- logic (upsert priority, mixed-conflict resolution) noted throughout — see
--- doc/wiki/Database-Schema.md's Open Items.
+-- CHECKPOINT, NOT FINAL. This is the post-Takeout redesign: Google Takeout
+-- is no longer an ingestion source for anything (Health Connect + the live
+-- API only, going forward) — see doc/wiki/Database-Schema.md for the full
+-- rationale per category. Major changes from the V1 checkpoint: food_log_
+-- entries is now a strict reference (food_id + quantity, never a snapshot);
+-- food_log_nutrients and the SRC/FIX/MOD modifier pattern are gone entirely
+-- (foods_db versioning is now the sole correction mechanism); `fingerprint`
+-- is gone everywhere (native IDs from the two remaining sources are the
+-- sole identity mechanism); sleep_sessions dropped its score/summary columns.
+-- Still open: the deferred cross-source reconciliation logic (upsert
+-- priority, mixed-conflict resolution, tolerance-based foods_db version
+-- matching) noted throughout — see doc/wiki/Database-Schema.md's Open Items.
 --
 -- ============================================================================
 -- GENERAL PATTERNS (see doc/wiki/Database-Design-Patterns.md for full writeup)
@@ -38,12 +44,15 @@
 -- checkpoint (avoids table-creation-order bootstrapping issues); it
 -- conceptually always references users.id.
 --
--- Dedup across the two ingestion sources (live API vs. Takeout bulk import)
--- uses a `fingerprint` CHAR(64) sha256 hash of each row's core identifying
--- fields, computed identically regardless of source, plus (where available)
--- a native ID from whichever source provides one. See
--- doc/wiki/Database-Schema.md for the exact fingerprint composition per
--- table and the identity-resolution priority (native ID before fingerprint).
+-- Identity/dedup across sources (Health Connect + the live API) relies
+-- solely on `api_uid` — a real native ID (HC's uuid, or the API's dataPoint
+-- ID) is available from at least one, usually both, remaining sources for
+-- every table except sleep_stages (neither source provides a per-stage ID).
+-- No content-hash fingerprint exists anywhere in this schema — it was
+-- dropped once Takeout (the source most likely to lack any native ID) was
+-- removed; tables with no native ID available (steps/heart-rate/HRV/
+-- sleep-stages) currently have no DB-level duplicate guard at all, deferred
+-- to application logic. See doc/wiki/Database-Schema.md.
 --
 -- Every user-owned table (including child tables, not just parents) carries
 -- user_id directly, and every uniqueness constraint is scoped per-user.
@@ -135,33 +144,6 @@ CREATE TABLE nutripal_hist.lut_ingestion_source_hist (
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
     KEY idx_lut_ingestion_source_hist_id (id)
-) ENGINE=InnoDB;
-
-CREATE TABLE lut_nutrient_value_type (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(64) NOT NULL,
-    description VARCHAR(255) NULL,
-    is_obsolete BOOLEAN NOT NULL DEFAULT FALSE,
-    db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    changed_by VARCHAR(255) NULL,
-    changed_by_user_id BIGINT UNSIGNED NULL,
-    UNIQUE KEY uq_lut_nutrient_value_type_name (name)
-) ENGINE=InnoDB;
-
-CREATE TABLE nutripal_hist.lut_nutrient_value_type_hist (
-    id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    id BIGINT UNSIGNED NOT NULL,
-    valid_start_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    valid_end_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    name VARCHAR(64) NOT NULL,
-    description VARCHAR(255) NULL,
-    is_obsolete BOOLEAN NOT NULL,
-    created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    changed_by VARCHAR(255) NULL,
-    changed_by_user_id BIGINT UNSIGNED NULL,
-    KEY idx_lut_nutrient_value_type_hist_id (id)
 ) ENGINE=InnoDB;
 
 -- Originally just mass/volume (for foods_db). Extended for `measurements`
@@ -603,9 +585,26 @@ CREATE TABLE nutripal_hist.unit_conversions_hist (
 -- equivalent (the original entry is version NULL, displayed as "v0" once a
 -- sibling exists). "All versions of a food" = rows sharing
 -- (name, brand_name, dimension_id). Real-world need: manufacturers/resellers
--- report slightly different nutrition for "the same" food over time.
--- food_log_entries already snapshots resolved nutrition at logging time, so
--- versioning here never retroactively changes historical logs.
+-- report slightly different nutrition for "the same" food over time — and
+-- now, every food_log_entries row references a SPECIFIC foods_db version
+-- (food_id is required, not a snapshot), so versioning is what keeps past
+-- logs stable when a food's nutrition genuinely changes: editing in place is
+-- never allowed, a real difference always creates a new version instead.
+-- Precision noise (floating-point/rounding) must NOT trigger a new version —
+-- matching an incoming value against the latest version uses a tolerance,
+-- not exact equality; this is application-layer matching logic, not
+-- something a DB constraint can express (deferred to ingest-time
+-- implementation, alongside the other reconciliation logic).
+--
+-- No `fingerprint`/provenance columns here (deliberately, unlike every
+-- ingested table) — provenance describes how a LOG EVENT reached us, not an
+-- inherent property of a catalog food, since many different log events (from
+-- different sources, over years) can all reference the same foods_db row.
+-- See doc/wiki/Database-Design-Patterns.md. No hard DB-level uniqueness
+-- constraint on (name, brand_name, dimension_id, version) either — real
+-- uniqueness now depends on the tolerance-based matching above, which only
+-- application code can evaluate; idx_foods_db_name below is for lookup
+-- performance only, not an integrity constraint.
 CREATE TABLE foods_db (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -621,13 +620,10 @@ CREATE TABLE foods_db (
     total_fat_g DECIMAL(8,2) NULL,
     notes VARCHAR(1000) NULL,
     is_archived BOOLEAN NOT NULL DEFAULT FALSE,
-    has_nutrient_overrides BOOLEAN NOT NULL DEFAULT FALSE,
-    fingerprint CHAR(64) NOT NULL,
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
-    UNIQUE KEY uq_foods_db_fingerprint (user_id, group_id, fingerprint),
     KEY idx_foods_db_name (name, brand_name),
     CONSTRAINT fk_foods_db_dimension FOREIGN KEY (dimension_id) REFERENCES lut_dimension(id),
     CONSTRAINT fk_foods_db_group FOREIGN KEY (group_id) REFERENCES groups(id),
@@ -653,8 +649,6 @@ CREATE TABLE nutripal_hist.foods_db_hist (
     total_fat_g DECIMAL(8,2) NULL,
     notes VARCHAR(1000) NULL,
     is_archived BOOLEAN NOT NULL,
-    has_nutrient_overrides BOOLEAN NOT NULL,
-    fingerprint CHAR(64) NOT NULL,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
@@ -730,26 +724,28 @@ CREATE TABLE nutripal_hist.lut_serving_unit_hist (
     KEY idx_lut_serving_unit_hist_id (id)
 ) ENGINE=InnoDB;
 
--- Full micronutrient tracking for catalog foods, same SRC/FIX/MOD model as
--- food_log_nutrients (see there for the effective-value formula). Sets up a
--- future enrichment workflow: catalog nutrients Google doesn't track can
--- supplement a matched Google-sourced log entry (matching logic deferred).
+-- Full micronutrient tracking for catalog foods. Sets up a future enrichment
+-- workflow: catalog nutrients Google/Health Connect doesn't track can be
+-- added here directly (matching/enrichment logic deferred).
+-- One row per nutrient per food (version) — no more SRC/FIX/MOD value types:
+-- modifiers were dropped entirely in favor of versioning as the sole
+-- correction mechanism (a real change to a nutrient value creates a new
+-- foods_db version; this row is simply "the value," not one of several
+-- competing claims about it).
 CREATE TABLE foods_db_nutrients (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     food_id BIGINT UNSIGNED NOT NULL,
     nutrient_id BIGINT UNSIGNED NOT NULL,
     quantity DECIMAL(10,4) NOT NULL,
     unit_id BIGINT UNSIGNED NOT NULL,
-    value_type_id BIGINT UNSIGNED NOT NULL,
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
-    UNIQUE KEY uq_foods_db_nutrients (food_id, nutrient_id, value_type_id),
+    UNIQUE KEY uq_foods_db_nutrients (food_id, nutrient_id),
     CONSTRAINT fk_foods_db_nutrients_food FOREIGN KEY (food_id) REFERENCES foods_db(id),
     CONSTRAINT fk_foods_db_nutrients_nutrient FOREIGN KEY (nutrient_id) REFERENCES lut_nutrient(id),
-    CONSTRAINT fk_foods_db_nutrients_unit FOREIGN KEY (unit_id) REFERENCES unit_conversions(id),
-    CONSTRAINT fk_foods_db_nutrients_value_type FOREIGN KEY (value_type_id) REFERENCES lut_nutrient_value_type(id)
+    CONSTRAINT fk_foods_db_nutrients_unit FOREIGN KEY (unit_id) REFERENCES unit_conversions(id)
 ) ENGINE=InnoDB;
 
 CREATE TABLE nutripal_hist.foods_db_nutrients_hist (
@@ -762,7 +758,6 @@ CREATE TABLE nutripal_hist.foods_db_nutrients_hist (
     nutrient_id BIGINT UNSIGNED NOT NULL,
     quantity DECIMAL(10,4) NOT NULL,
     unit_id BIGINT UNSIGNED NOT NULL,
-    value_type_id BIGINT UNSIGNED NOT NULL,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
@@ -830,41 +825,46 @@ CREATE TABLE nutripal_hist.foods_db_last_used_hist (
 -- `consumed_at` column. Any code creating new entries must follow the same
 -- convention: end_time = start_time + 1 minute.
 --
--- food_id (nullable): which foods_db row (a specific version) this entry was
--- logged from, if any. Most Google-synced entries won't have one unless/until
--- a future matching/enrichment pass links them. Nutrition here is always a
--- snapshot resolved at logging time (via serving_amount/serving_unit_id
--- against foods_db's per-100 values) — food_id is for traceability/"log
--- again," never live-joined for display, so re-versioning a catalog food
--- never retroactively changes past logs. App-level invariant (not
--- DB-enforced): if serving_unit_id resolves to a foods_db_custom_units row,
--- that row's own food_id must match this food_id.
+-- STRICT REFERENCE MODEL: a log entry is always food_id + quantity, never a
+-- standalone snapshot. food_id/serving_amount/serving_unit_id are all
+-- required (not optional traceability) — there is no other way to represent
+-- what was logged. Nutrition is always derived at read time by joining to
+-- foods_db/foods_db_nutrients and scaling by the resolved quantity; nothing
+-- nutritional is stored on this table. This mirrors how Google itself logs
+-- food — one row per ingredient/item (e.g. "Yellow Onion", "Tomatoes",
+-- "Breaded Chicken Cutlet" all logged separately under the same meal_type
+-- and a shared time window) rather than one row per composed meal — so no
+-- separate "meal" grouping construct is needed; a meal is just several rows
+-- sharing meal_type_id and a close start_time. A "recipe" (a named template
+-- of ingredient+quantity pairs for quickly generating several rows at once)
+-- is a wholly separate, not-yet-built concept — it is never referenced here,
+-- only expanded into individual rows at logging time.
+--
+-- No `fingerprint` (dropped everywhere — see
+-- doc/wiki/Database-Design-Patterns.md): both remaining ingestion sources
+-- (Health Connect, the live API) provide a real native ID per food-log
+-- event, so api_uid is now the sole identity mechanism. `nutripal`-created
+-- entries (future custom logging) simply have api_uid = NULL and never
+-- needed cross-source dedup in the first place.
+--
+-- App-level invariant (not DB-enforced): if serving_unit_id resolves to a
+-- foods_db_custom_units row, that row's own food_id must match this food_id.
 CREATE TABLE food_log_entries (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT UNSIGNED NOT NULL,
     start_time DATETIME NOT NULL,
     end_time DATETIME NOT NULL,
-    brand_name VARCHAR(255) NULL,
-    food_name VARCHAR(255) NOT NULL,
     meal_type_id BIGINT UNSIGNED NOT NULL,
-    energy_kcal DECIMAL(8,2) NULL,
-    is_energy_estimated BOOLEAN NOT NULL DEFAULT FALSE,
-    total_protein_g DECIMAL(8,2) NULL,
-    total_carbohydrate_g DECIMAL(8,2) NULL,
-    total_fat_g DECIMAL(8,2) NULL,
-    serving_amount DECIMAL(8,2) NULL,
-    serving_unit_id BIGINT UNSIGNED NULL,
-    food_id BIGINT UNSIGNED NULL,
+    food_id BIGINT UNSIGNED NOT NULL,
+    serving_amount DECIMAL(8,2) NOT NULL,
+    serving_unit_id BIGINT UNSIGNED NOT NULL,
     data_source_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
-    has_nutrient_overrides BOOLEAN NOT NULL DEFAULT FALSE,
-    fingerprint CHAR(64) NOT NULL,
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
-    UNIQUE KEY uq_food_log_entries_fingerprint (user_id, fingerprint),
     UNIQUE KEY uq_food_log_entries_api_uid (user_id, api_uid),
     KEY idx_food_log_entries_start_time (user_id, start_time),
     KEY idx_food_log_entries_food (food_id),
@@ -885,73 +885,17 @@ CREATE TABLE nutripal_hist.food_log_entries_hist (
     user_id BIGINT UNSIGNED NOT NULL,
     start_time DATETIME NOT NULL,
     end_time DATETIME NOT NULL,
-    brand_name VARCHAR(255) NULL,
-    food_name VARCHAR(255) NOT NULL,
     meal_type_id BIGINT UNSIGNED NOT NULL,
-    energy_kcal DECIMAL(8,2) NULL,
-    is_energy_estimated BOOLEAN NOT NULL,
-    total_protein_g DECIMAL(8,2) NULL,
-    total_carbohydrate_g DECIMAL(8,2) NULL,
-    total_fat_g DECIMAL(8,2) NULL,
-    serving_amount DECIMAL(8,2) NULL,
-    serving_unit_id BIGINT UNSIGNED NULL,
-    food_id BIGINT UNSIGNED NULL,
+    food_id BIGINT UNSIGNED NOT NULL,
+    serving_amount DECIMAL(8,2) NOT NULL,
+    serving_unit_id BIGINT UNSIGNED NOT NULL,
     data_source_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
-    has_nutrient_overrides BOOLEAN NOT NULL,
-    fingerprint CHAR(64) NOT NULL,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
     KEY idx_food_log_entries_hist_id (id)
-) ENGINE=InnoDB;
-
--- One row per nutrient PER VALUE TYPE per entry (up to 3: SRC/FIX/MOD).
--- Effective value (computed at read time, never stored/overwritten):
---   IF a FIX row exists: effective = FIX
---   ELSE: effective = GREATEST(0, COALESCE(SRC,0) + COALESCE(MOD,0))
--- (clamped at zero — a negative MOD could otherwise push a quantity below
--- zero, which is physically meaningless; FIX itself is validated
--- non-negative at entry time). SRC is always preserved untouched — a
--- correction never overwrites the original imported value.
--- nutrient_id: dropped at ingest if not in lut_nutrient (see there).
-CREATE TABLE food_log_nutrients (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    user_id BIGINT UNSIGNED NOT NULL,
-    food_log_entry_id BIGINT UNSIGNED NOT NULL,
-    nutrient_id BIGINT UNSIGNED NOT NULL,
-    quantity DECIMAL(10,4) NOT NULL,
-    unit_id BIGINT UNSIGNED NOT NULL,
-    value_type_id BIGINT UNSIGNED NOT NULL,
-    db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    changed_by VARCHAR(255) NULL,
-    changed_by_user_id BIGINT UNSIGNED NULL,
-    UNIQUE KEY uq_food_log_nutrients (food_log_entry_id, nutrient_id, value_type_id),
-    CONSTRAINT fk_food_log_nutrients_user FOREIGN KEY (user_id) REFERENCES users(id),
-    CONSTRAINT fk_food_log_nutrients_entry FOREIGN KEY (food_log_entry_id) REFERENCES food_log_entries(id),
-    CONSTRAINT fk_food_log_nutrients_nutrient FOREIGN KEY (nutrient_id) REFERENCES lut_nutrient(id),
-    CONSTRAINT fk_food_log_nutrients_unit FOREIGN KEY (unit_id) REFERENCES unit_conversions(id),
-    CONSTRAINT fk_food_log_nutrients_value_type FOREIGN KEY (value_type_id) REFERENCES lut_nutrient_value_type(id)
-) ENGINE=InnoDB;
-
-CREATE TABLE nutripal_hist.food_log_nutrients_hist (
-    id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    id BIGINT UNSIGNED NOT NULL,
-    valid_start_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    valid_end_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    user_id BIGINT UNSIGNED NOT NULL,
-    food_log_entry_id BIGINT UNSIGNED NOT NULL,
-    nutrient_id BIGINT UNSIGNED NOT NULL,
-    quantity DECIMAL(10,4) NOT NULL,
-    unit_id BIGINT UNSIGNED NOT NULL,
-    value_type_id BIGINT UNSIGNED NOT NULL,
-    created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    changed_by VARCHAR(255) NULL,
-    changed_by_user_id BIGINT UNSIGNED NULL,
-    KEY idx_food_log_nutrients_hist_id (id)
 ) ENGINE=InnoDB;
 
 -- ----------------------------------------------------------------------------
@@ -971,12 +915,10 @@ CREATE TABLE steps_readings (
     recording_method_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
-    fingerprint CHAR(64) NOT NULL,
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
-    UNIQUE KEY uq_steps_readings_fingerprint (user_id, fingerprint),
     UNIQUE KEY uq_steps_readings_api_uid (user_id, api_uid),
     KEY idx_steps_readings_time (user_id, reading_time),
     CONSTRAINT fk_steps_readings_user FOREIGN KEY (user_id) REFERENCES users(id),
@@ -998,7 +940,6 @@ CREATE TABLE nutripal_hist.steps_readings_hist (
     recording_method_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
-    fingerprint CHAR(64) NOT NULL,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
@@ -1014,12 +955,10 @@ CREATE TABLE heart_rate_readings (
     recording_method_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
-    fingerprint CHAR(64) NOT NULL,
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
-    UNIQUE KEY uq_heart_rate_readings_fingerprint (user_id, fingerprint),
     UNIQUE KEY uq_heart_rate_readings_api_uid (user_id, api_uid),
     KEY idx_heart_rate_readings_time (user_id, reading_time),
     CONSTRAINT fk_heart_rate_readings_user FOREIGN KEY (user_id) REFERENCES users(id),
@@ -1041,7 +980,6 @@ CREATE TABLE nutripal_hist.heart_rate_readings_hist (
     recording_method_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
-    fingerprint CHAR(64) NOT NULL,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
@@ -1060,12 +998,10 @@ CREATE TABLE heart_rate_variability_readings (
     recording_method_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
-    fingerprint CHAR(64) NOT NULL,
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
-    UNIQUE KEY uq_heart_rate_variability_readings_fingerprint (user_id, fingerprint),
     UNIQUE KEY uq_heart_rate_variability_readings_api_uid (user_id, api_uid),
     KEY idx_heart_rate_variability_readings_time (user_id, reading_time),
     CONSTRAINT fk_heart_rate_variability_readings_user FOREIGN KEY (user_id) REFERENCES users(id),
@@ -1087,7 +1023,6 @@ CREATE TABLE nutripal_hist.heart_rate_variability_readings_hist (
     recording_method_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
-    fingerprint CHAR(64) NOT NULL,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
@@ -1143,7 +1078,7 @@ CREATE TABLE nutripal_hist.daily_resting_heart_rate_hist (
 -- Generic point-in-time scalar body metric (weight, height, blood pressure
 -- systolic/diastolic, body fat %, etc.) — one row per (user, type, time).
 -- Deliberately generalized instead of one table per metric (like
--- food_log_nutrients' nutrient_id/quantity/unit_id shape) since new
+-- foods_db_nutrients' nutrient_id/quantity/unit_id shape) since new
 -- characteristics are just a new lut_measurement_type row, not a migration.
 -- A multi-value reading (e.g. blood pressure) becomes multiple rows sharing
 -- the same reading_time — the app pairs them back together by matching
@@ -1162,12 +1097,10 @@ CREATE TABLE measurements (
     recording_method_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
-    fingerprint CHAR(64) NOT NULL,
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
-    UNIQUE KEY uq_measurements_fingerprint (user_id, fingerprint),
     UNIQUE KEY uq_measurements_api_uid (user_id, measurement_type_id, api_uid),
     KEY idx_measurements_time (user_id, measurement_type_id, reading_time),
     CONSTRAINT fk_measurements_user FOREIGN KEY (user_id) REFERENCES users(id),
@@ -1193,7 +1126,6 @@ CREATE TABLE nutripal_hist.measurements_hist (
     recording_method_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
-    fingerprint CHAR(64) NOT NULL,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
@@ -1217,7 +1149,6 @@ CREATE TABLE nutripal_hist.measurements_hist (
 CREATE TABLE exercise_sessions (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT UNSIGNED NOT NULL,
-    log_id VARCHAR(64) NULL,
     start_time DATETIME NOT NULL,
     end_time DATETIME NULL,
     activity_name VARCHAR(128) NULL,
@@ -1234,15 +1165,12 @@ CREATE TABLE exercise_sessions (
     recording_method_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
-    fingerprint CHAR(64) NOT NULL,
     raw_details JSON NULL COMMENT 'Heart-rate zones, active-zone-minutes breakdown, GPS points, etc. — preserved but not individually columned in V1',
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
-    UNIQUE KEY uq_exercise_sessions_fingerprint (user_id, fingerprint),
     UNIQUE KEY uq_exercise_sessions_api_uid (user_id, api_uid),
-    UNIQUE KEY uq_exercise_sessions_log_id (user_id, log_id),
     KEY idx_exercise_sessions_start_time (user_id, start_time),
     CONSTRAINT fk_exercise_sessions_user FOREIGN KEY (user_id) REFERENCES users(id),
     CONSTRAINT fk_exercise_sessions_activity_type FOREIGN KEY (activity_type_id) REFERENCES lut_activity_type(id),
@@ -1259,7 +1187,6 @@ CREATE TABLE nutripal_hist.exercise_sessions_hist (
     valid_start_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     valid_end_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     user_id BIGINT UNSIGNED NOT NULL,
-    log_id VARCHAR(64) NULL,
     start_time DATETIME NOT NULL,
     end_time DATETIME NULL,
     activity_name VARCHAR(128) NULL,
@@ -1276,7 +1203,6 @@ CREATE TABLE nutripal_hist.exercise_sessions_hist (
     recording_method_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
-    fingerprint CHAR(64) NOT NULL,
     raw_details JSON NULL,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
@@ -1284,63 +1210,38 @@ CREATE TABLE nutripal_hist.exercise_sessions_hist (
     KEY idx_exercise_sessions_hist_id (id)
 ) ENGINE=InnoDB;
 
--- sleep_type_id: CLASSIC/STAGES, confirmed identical vocabulary in both
--- sources. main_sleep: distinguishes an overnight sleep from a nap (API's
--- `mainSleep`, not in Takeout's CSVs — nullable there).
--- Score columns are DECIMAL, not the originally-drafted TINYINT UNSIGNED —
--- real Takeout data has fractional scores (e.g. 83.364879702283261) and uses
--- -1 as a "not computed" sentinel, translated to NULL at ingest time (an
--- UNSIGNED integer type could hold neither). Scores are API-absent entirely
--- (confirmed: the live API's sleep response has no score fields at all) —
--- only ever populated from Takeout's UserSleepScores file.
--- IMPORTANT ingest note: Takeout's UserSleeps/UserSleepStages/
--- UserSleepScores CSVs each have their own "data_source" column, but for
--- THESE THREE FILES ONLY it actually reports the RECORDING METHOD (MANUAL/
--- DERIVED/ACTIVELY_MEASURED/PASSIVELY_MEASURED) — the same vocabulary as the
--- API's dataSource.recordingMethod — not a device/app name like every other
--- Takeout file. Maps to recording_method_id, NOT data_source_id. These sleep
--- CSVs provide no device/app name at all, so data_source_id will typically
--- stay NULL for Takeout-sourced sleep rows.
--- raw_details holds supplementary score sub-metrics that are either
--- computable from sleep_stages directly (deep_sleep_minutes, rem_sleep_
--- percent) or rarely-queried detail (algorithm_version, sleep_goal_minutes,
--- waso_count_long_wakes, waso_count_all_wake_time, restlessness_normalized,
--- hr_below_resting_hr, short-awakening micro-events) — same promoted-
--- columns-vs-JSON split already used on exercise_sessions.
+-- sleep_type_id: CLASSIC/STAGES — nullable, since Health Connect has no
+-- equivalent concept at all (sessions are just start/end + stages there).
+-- main_sleep: distinguishes an overnight sleep from a nap (API's
+-- `mainSleep`) — also nullable, HC has no equivalent flag either.
+--
+-- Deliberately minimal: no scores (dropped entirely — not available from
+-- either remaining source, and not wanted even when Takeout had them), and
+-- no minutes_*/efficiency summary columns — all of that is derivable by
+-- summing sleep_stages durations by stage_type at read time, so it isn't
+-- stored redundantly here. This table is now just session identity +
+-- boundaries + provenance; sleep_stages carries the real detail (when + what
+-- per zone).
+--
+-- No `fingerprint` (dropped everywhere) and no `sleep_id` (Takeout-specific
+-- native ID, now unused) — api_uid (HC's uuid or the API's native id) is the
+-- sole identity mechanism.
 CREATE TABLE sleep_sessions (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT UNSIGNED NOT NULL,
-    sleep_id VARCHAR(64) NULL,
-    sleep_type_id BIGINT UNSIGNED NOT NULL,
+    sleep_type_id BIGINT UNSIGNED NULL,
     main_sleep BOOLEAN NULL,
     start_time DATETIME NOT NULL,
     end_time DATETIME NOT NULL,
-    minutes_in_sleep_period INT UNSIGNED NULL,
-    minutes_asleep INT UNSIGNED NULL,
-    minutes_awake INT UNSIGNED NULL,
-    minutes_to_fall_asleep INT UNSIGNED NULL,
-    minutes_after_wake_up INT UNSIGNED NULL,
-    minutes_longest_awakening INT UNSIGNED NULL,
-    minutes_to_persistent_sleep INT UNSIGNED NULL,
-    efficiency TINYINT UNSIGNED NULL,
-    overall_score DECIMAL(6,2) NULL,
-    duration_score DECIMAL(6,2) NULL,
-    composition_score DECIMAL(6,2) NULL,
-    revitalization_score DECIMAL(6,2) NULL,
-    resting_heart_rate SMALLINT UNSIGNED NULL,
     data_source_id BIGINT UNSIGNED NULL,
     recording_method_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
-    fingerprint CHAR(64) NOT NULL,
-    raw_details JSON NULL COMMENT 'Score sub-metrics computable from sleep_stages or rarely queried, algorithm version, short-awakening micro-events, etc. — see table comment',
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
-    UNIQUE KEY uq_sleep_sessions_fingerprint (user_id, fingerprint),
     UNIQUE KEY uq_sleep_sessions_api_uid (user_id, api_uid),
-    UNIQUE KEY uq_sleep_sessions_sleep_id (user_id, sleep_id),
     KEY idx_sleep_sessions_start_time (user_id, start_time),
     CONSTRAINT fk_sleep_sessions_user FOREIGN KEY (user_id) REFERENCES users(id),
     CONSTRAINT fk_sleep_sessions_type FOREIGN KEY (sleep_type_id) REFERENCES lut_sleep_type(id),
@@ -1356,30 +1257,14 @@ CREATE TABLE nutripal_hist.sleep_sessions_hist (
     valid_start_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     valid_end_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     user_id BIGINT UNSIGNED NOT NULL,
-    sleep_id VARCHAR(64) NULL,
-    sleep_type_id BIGINT UNSIGNED NOT NULL,
+    sleep_type_id BIGINT UNSIGNED NULL,
     main_sleep BOOLEAN NULL,
     start_time DATETIME NOT NULL,
     end_time DATETIME NOT NULL,
-    minutes_in_sleep_period INT UNSIGNED NULL,
-    minutes_asleep INT UNSIGNED NULL,
-    minutes_awake INT UNSIGNED NULL,
-    minutes_to_fall_asleep INT UNSIGNED NULL,
-    minutes_after_wake_up INT UNSIGNED NULL,
-    minutes_longest_awakening INT UNSIGNED NULL,
-    minutes_to_persistent_sleep INT UNSIGNED NULL,
-    efficiency TINYINT UNSIGNED NULL,
-    overall_score DECIMAL(6,2) NULL,
-    duration_score DECIMAL(6,2) NULL,
-    composition_score DECIMAL(6,2) NULL,
-    revitalization_score DECIMAL(6,2) NULL,
-    resting_heart_rate SMALLINT UNSIGNED NULL,
     data_source_id BIGINT UNSIGNED NULL,
     recording_method_id BIGINT UNSIGNED NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
     api_uid VARCHAR(255) NULL,
-    fingerprint CHAR(64) NOT NULL,
-    raw_details JSON NULL,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
@@ -1387,31 +1272,29 @@ CREATE TABLE nutripal_hist.sleep_sessions_hist (
 ) ENGINE=InnoDB;
 
 -- Confirmed via real data (both the live API's embedded sleep.stages[] and
--- Takeout's legacy sleep-*.json levels.data[]) that API-sourced stage rows
--- have NO native ID at all — only Takeout's UserSleepStages.csv provides
--- one (sleep_stage_id). fingerprint is therefore required, not optional,
--- for this table: sha256(sleep_session_id|start_time|end_time|stage type
--- name) — scoped to the session so identical stage durations across
--- different nights never collide. ingestion_source_id added for the same
--- per-row provenance bookkeeping every other table has; data_source_id/
--- recording_method_id deliberately omitted — a stage inherits its parent
--- session's device/recording-method, no need to repeat it per stage row.
+-- Health Connect's sleep_stages_table) that NEITHER remaining source gives a
+-- native per-stage ID — api_uid stays nullable here and, realistically,
+-- will most often be NULL. No DB-level duplicate guard exists for this table
+-- as a result (fingerprint dropped everywhere, and no natural-columns
+-- fallback was added either) — any resync-duplicate prevention is a deferred
+-- application-logic concern, same as steps/heart-rate/HRV.
+-- data_source_id/recording_method_id deliberately omitted — a stage
+-- inherits its parent session's device/recording-method, no need to repeat
+-- it per stage row.
 CREATE TABLE sleep_stages (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT UNSIGNED NOT NULL,
     sleep_session_id BIGINT UNSIGNED NOT NULL,
-    sleep_stage_id VARCHAR(64) NULL,
     stage_type_id BIGINT UNSIGNED NOT NULL,
     start_time DATETIME NOT NULL,
     end_time DATETIME NOT NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
-    fingerprint CHAR(64) NOT NULL,
+    api_uid VARCHAR(255) NULL,
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
-    UNIQUE KEY uq_sleep_stages_sleep_stage_id (user_id, sleep_stage_id),
-    UNIQUE KEY uq_sleep_stages_fingerprint (user_id, fingerprint),
+    UNIQUE KEY uq_sleep_stages_api_uid (user_id, api_uid),
     KEY idx_sleep_stages_session (sleep_session_id),
     CONSTRAINT fk_sleep_stages_user FOREIGN KEY (user_id) REFERENCES users(id),
     CONSTRAINT fk_sleep_stages_session FOREIGN KEY (sleep_session_id) REFERENCES sleep_sessions(id),
@@ -1427,12 +1310,11 @@ CREATE TABLE nutripal_hist.sleep_stages_hist (
     valid_end_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     user_id BIGINT UNSIGNED NOT NULL,
     sleep_session_id BIGINT UNSIGNED NOT NULL,
-    sleep_stage_id VARCHAR(64) NULL,
     stage_type_id BIGINT UNSIGNED NOT NULL,
     start_time DATETIME NOT NULL,
     end_time DATETIME NOT NULL,
     ingestion_source_id BIGINT UNSIGNED NOT NULL,
-    fingerprint CHAR(64) NOT NULL,
+    api_uid VARCHAR(255) NULL,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
@@ -1469,17 +1351,6 @@ CREATE TRIGGER trg_lut_ingestion_source_bu BEFORE UPDATE ON lut_ingestion_source
 END$$
 CREATE TRIGGER trg_lut_ingestion_source_bd BEFORE DELETE ON lut_ingestion_source FOR EACH ROW BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Delete is not allowed on lut_ingestion_source; change status instead.';
-END$$
-
-CREATE TRIGGER trg_lut_nutrient_value_type_bu BEFORE UPDATE ON lut_nutrient_value_type FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.lut_nutrient_value_type_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.description, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
-    SET NEW.id = OLD.id;
-    SET NEW.created_ts = OLD.created_ts;
-    SET NEW.db_ts = NOW();
-END$$
-CREATE TRIGGER trg_lut_nutrient_value_type_bd BEFORE DELETE ON lut_nutrient_value_type FOR EACH ROW BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Delete is not allowed on lut_nutrient_value_type; change status instead.';
 END$$
 
 CREATE TRIGGER trg_lut_dimension_bu BEFORE UPDATE ON lut_dimension FOR EACH ROW BEGIN
@@ -1638,8 +1509,8 @@ CREATE TRIGGER trg_unit_conversions_bd BEFORE DELETE ON unit_conversions FOR EAC
 END$$
 
 CREATE TRIGGER trg_foods_db_bu BEFORE UPDATE ON foods_db FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.foods_db_hist (id, valid_start_ts, valid_end_ts, name, brand_name, dimension_id, version, group_id, user_id, energy_kcal, is_energy_estimated, total_protein_g, total_carbohydrate_g, total_fat_g, notes, is_archived, has_nutrient_overrides, fingerprint, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.brand_name, OLD.dimension_id, OLD.version, OLD.group_id, OLD.user_id, OLD.energy_kcal, OLD.is_energy_estimated, OLD.total_protein_g, OLD.total_carbohydrate_g, OLD.total_fat_g, OLD.notes, OLD.is_archived, OLD.has_nutrient_overrides, OLD.fingerprint, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.foods_db_hist (id, valid_start_ts, valid_end_ts, name, brand_name, dimension_id, version, group_id, user_id, energy_kcal, is_energy_estimated, total_protein_g, total_carbohydrate_g, total_fat_g, notes, is_archived, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.brand_name, OLD.dimension_id, OLD.version, OLD.group_id, OLD.user_id, OLD.energy_kcal, OLD.is_energy_estimated, OLD.total_protein_g, OLD.total_carbohydrate_g, OLD.total_fat_g, OLD.notes, OLD.is_archived, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();
@@ -1671,8 +1542,8 @@ CREATE TRIGGER trg_lut_serving_unit_bd BEFORE DELETE ON lut_serving_unit FOR EAC
 END$$
 
 CREATE TRIGGER trg_foods_db_nutrients_bu BEFORE UPDATE ON foods_db_nutrients FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.foods_db_nutrients_hist (id, valid_start_ts, valid_end_ts, food_id, nutrient_id, quantity, unit_id, value_type_id, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.food_id, OLD.nutrient_id, OLD.quantity, OLD.unit_id, OLD.value_type_id, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.foods_db_nutrients_hist (id, valid_start_ts, valid_end_ts, food_id, nutrient_id, quantity, unit_id, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.food_id, OLD.nutrient_id, OLD.quantity, OLD.unit_id, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();
@@ -1694,8 +1565,8 @@ CREATE TRIGGER trg_foods_db_last_used_bd BEFORE DELETE ON foods_db_last_used FOR
 END$$
 
 CREATE TRIGGER trg_food_log_entries_bu BEFORE UPDATE ON food_log_entries FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.food_log_entries_hist (id, valid_start_ts, valid_end_ts, user_id, start_time, end_time, brand_name, food_name, meal_type_id, energy_kcal, is_energy_estimated, total_protein_g, total_carbohydrate_g, total_fat_g, serving_amount, serving_unit_id, food_id, data_source_id, ingestion_source_id, api_uid, has_nutrient_overrides, fingerprint, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.start_time, OLD.end_time, OLD.brand_name, OLD.food_name, OLD.meal_type_id, OLD.energy_kcal, OLD.is_energy_estimated, OLD.total_protein_g, OLD.total_carbohydrate_g, OLD.total_fat_g, OLD.serving_amount, OLD.serving_unit_id, OLD.food_id, OLD.data_source_id, OLD.ingestion_source_id, OLD.api_uid, OLD.has_nutrient_overrides, OLD.fingerprint, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.food_log_entries_hist (id, valid_start_ts, valid_end_ts, user_id, start_time, end_time, meal_type_id, food_id, serving_amount, serving_unit_id, data_source_id, ingestion_source_id, api_uid, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.start_time, OLD.end_time, OLD.meal_type_id, OLD.food_id, OLD.serving_amount, OLD.serving_unit_id, OLD.data_source_id, OLD.ingestion_source_id, OLD.api_uid, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();
@@ -1704,20 +1575,10 @@ CREATE TRIGGER trg_food_log_entries_bd BEFORE DELETE ON food_log_entries FOR EAC
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Delete is not allowed on food_log_entries.';
 END$$
 
-CREATE TRIGGER trg_food_log_nutrients_bu BEFORE UPDATE ON food_log_nutrients FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.food_log_nutrients_hist (id, valid_start_ts, valid_end_ts, user_id, food_log_entry_id, nutrient_id, quantity, unit_id, value_type_id, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.food_log_entry_id, OLD.nutrient_id, OLD.quantity, OLD.unit_id, OLD.value_type_id, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
-    SET NEW.id = OLD.id;
-    SET NEW.created_ts = OLD.created_ts;
-    SET NEW.db_ts = NOW();
-END$$
-CREATE TRIGGER trg_food_log_nutrients_bd BEFORE DELETE ON food_log_nutrients FOR EACH ROW BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Delete is not allowed on food_log_nutrients.';
-END$$
 
 CREATE TRIGGER trg_steps_readings_bu BEFORE UPDATE ON steps_readings FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.steps_readings_hist (id, valid_start_ts, valid_end_ts, user_id, reading_time, steps, data_source_id, recording_method_id, ingestion_source_id, api_uid, fingerprint, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.reading_time, OLD.steps, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.fingerprint, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.steps_readings_hist (id, valid_start_ts, valid_end_ts, user_id, reading_time, steps, data_source_id, recording_method_id, ingestion_source_id, api_uid, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.reading_time, OLD.steps, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();
@@ -1727,8 +1588,8 @@ CREATE TRIGGER trg_steps_readings_bd BEFORE DELETE ON steps_readings FOR EACH RO
 END$$
 
 CREATE TRIGGER trg_heart_rate_readings_bu BEFORE UPDATE ON heart_rate_readings FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.heart_rate_readings_hist (id, valid_start_ts, valid_end_ts, user_id, reading_time, bpm, data_source_id, recording_method_id, ingestion_source_id, api_uid, fingerprint, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.reading_time, OLD.bpm, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.fingerprint, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.heart_rate_readings_hist (id, valid_start_ts, valid_end_ts, user_id, reading_time, bpm, data_source_id, recording_method_id, ingestion_source_id, api_uid, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.reading_time, OLD.bpm, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();
@@ -1738,8 +1599,8 @@ CREATE TRIGGER trg_heart_rate_readings_bd BEFORE DELETE ON heart_rate_readings F
 END$$
 
 CREATE TRIGGER trg_heart_rate_variability_readings_bu BEFORE UPDATE ON heart_rate_variability_readings FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.heart_rate_variability_readings_hist (id, valid_start_ts, valid_end_ts, user_id, reading_time, rmssd_ms, data_source_id, recording_method_id, ingestion_source_id, api_uid, fingerprint, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.reading_time, OLD.rmssd_ms, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.fingerprint, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.heart_rate_variability_readings_hist (id, valid_start_ts, valid_end_ts, user_id, reading_time, rmssd_ms, data_source_id, recording_method_id, ingestion_source_id, api_uid, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.reading_time, OLD.rmssd_ms, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();
@@ -1760,8 +1621,8 @@ CREATE TRIGGER trg_daily_resting_heart_rate_bd BEFORE DELETE ON daily_resting_he
 END$$
 
 CREATE TRIGGER trg_measurements_bu BEFORE UPDATE ON measurements FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.measurements_hist (id, valid_start_ts, valid_end_ts, user_id, measurement_type_id, reading_time, value, unit_id, data_source_id, recording_method_id, ingestion_source_id, api_uid, fingerprint, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.measurement_type_id, OLD.reading_time, OLD.value, OLD.unit_id, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.fingerprint, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.measurements_hist (id, valid_start_ts, valid_end_ts, user_id, measurement_type_id, reading_time, value, unit_id, data_source_id, recording_method_id, ingestion_source_id, api_uid, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.measurement_type_id, OLD.reading_time, OLD.value, OLD.unit_id, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();
@@ -1771,8 +1632,8 @@ CREATE TRIGGER trg_measurements_bd BEFORE DELETE ON measurements FOR EACH ROW BE
 END$$
 
 CREATE TRIGGER trg_exercise_sessions_bu BEFORE UPDATE ON exercise_sessions FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.exercise_sessions_hist (id, valid_start_ts, valid_end_ts, user_id, log_id, start_time, end_time, activity_name, activity_type_id, duration_ms, active_duration_ms, calories, distance, distance_unit_id, steps, average_heart_rate, has_gps, data_source_id, recording_method_id, ingestion_source_id, api_uid, fingerprint, raw_details, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.log_id, OLD.start_time, OLD.end_time, OLD.activity_name, OLD.activity_type_id, OLD.duration_ms, OLD.active_duration_ms, OLD.calories, OLD.distance, OLD.distance_unit_id, OLD.steps, OLD.average_heart_rate, OLD.has_gps, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.fingerprint, OLD.raw_details, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.exercise_sessions_hist (id, valid_start_ts, valid_end_ts, user_id, start_time, end_time, activity_name, activity_type_id, duration_ms, active_duration_ms, calories, distance, distance_unit_id, steps, average_heart_rate, has_gps, data_source_id, recording_method_id, ingestion_source_id, api_uid, raw_details, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.start_time, OLD.end_time, OLD.activity_name, OLD.activity_type_id, OLD.duration_ms, OLD.active_duration_ms, OLD.calories, OLD.distance, OLD.distance_unit_id, OLD.steps, OLD.average_heart_rate, OLD.has_gps, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.raw_details, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();
@@ -1782,8 +1643,8 @@ CREATE TRIGGER trg_exercise_sessions_bd BEFORE DELETE ON exercise_sessions FOR E
 END$$
 
 CREATE TRIGGER trg_sleep_sessions_bu BEFORE UPDATE ON sleep_sessions FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.sleep_sessions_hist (id, valid_start_ts, valid_end_ts, user_id, sleep_id, sleep_type_id, main_sleep, start_time, end_time, minutes_in_sleep_period, minutes_asleep, minutes_awake, minutes_to_fall_asleep, minutes_after_wake_up, minutes_longest_awakening, minutes_to_persistent_sleep, efficiency, overall_score, duration_score, composition_score, revitalization_score, resting_heart_rate, data_source_id, recording_method_id, ingestion_source_id, api_uid, fingerprint, raw_details, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.sleep_id, OLD.sleep_type_id, OLD.main_sleep, OLD.start_time, OLD.end_time, OLD.minutes_in_sleep_period, OLD.minutes_asleep, OLD.minutes_awake, OLD.minutes_to_fall_asleep, OLD.minutes_after_wake_up, OLD.minutes_longest_awakening, OLD.minutes_to_persistent_sleep, OLD.efficiency, OLD.overall_score, OLD.duration_score, OLD.composition_score, OLD.revitalization_score, OLD.resting_heart_rate, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.fingerprint, OLD.raw_details, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.sleep_sessions_hist (id, valid_start_ts, valid_end_ts, user_id, sleep_type_id, main_sleep, start_time, end_time, data_source_id, recording_method_id, ingestion_source_id, api_uid, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.sleep_type_id, OLD.main_sleep, OLD.start_time, OLD.end_time, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();
@@ -1793,8 +1654,8 @@ CREATE TRIGGER trg_sleep_sessions_bd BEFORE DELETE ON sleep_sessions FOR EACH RO
 END$$
 
 CREATE TRIGGER trg_sleep_stages_bu BEFORE UPDATE ON sleep_stages FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.sleep_stages_hist (id, valid_start_ts, valid_end_ts, user_id, sleep_session_id, sleep_stage_id, stage_type_id, start_time, end_time, ingestion_source_id, fingerprint, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.sleep_session_id, OLD.sleep_stage_id, OLD.stage_type_id, OLD.start_time, OLD.end_time, OLD.ingestion_source_id, OLD.fingerprint, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.sleep_stages_hist (id, valid_start_ts, valid_end_ts, user_id, sleep_session_id, stage_type_id, start_time, end_time, ingestion_source_id, api_uid, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.sleep_session_id, OLD.stage_type_id, OLD.start_time, OLD.end_time, OLD.ingestion_source_id, OLD.api_uid, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();
