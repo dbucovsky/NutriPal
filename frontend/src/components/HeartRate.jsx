@@ -1,21 +1,44 @@
 import { useEffect, useState } from 'react'
 import {
   Chart as ChartJS,
-  CategoryScale,
   LinearScale,
   PointElement,
   LineElement,
   Tooltip,
 } from 'chart.js'
+import annotationPlugin from 'chartjs-plugin-annotation'
 import { Line } from 'react-chartjs-2'
 import { getHeartRate } from '../api'
 import { todayLocal } from '../dateUtils'
 import DateNav from './DateNav'
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip)
+ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, annotationPlugin)
+
+const EXERCISE_COLOR = 'rgba(217, 130, 43, 0.18)'
+const SLEEP_COLOR = 'rgba(47, 95, 143, 0.15)'
 
 function stat(value, unit = '') {
   return value === null || value === undefined ? '—' : `${value}${unit}`
+}
+
+function minutesToLabel(minutes) {
+  const h = Math.floor(minutes / 60)
+  const m = Math.round(minutes % 60)
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+function periodsToAnnotations(periods, color, prefix) {
+  const annotations = {}
+  periods.forEach((p, i) => {
+    annotations[`${prefix}${i}`] = {
+      type: 'box',
+      xMin: p.start_minute,
+      xMax: p.end_minute,
+      backgroundColor: color,
+      borderWidth: 0,
+    }
+  })
+  return annotations
 }
 
 export default function HeartRate({ userId }) {
@@ -44,10 +67,10 @@ export default function HeartRate({ userId }) {
   }, [userId, date])
 
   const chartData = data && {
-    labels: data.series.map((p) => p.time),
     datasets: [
       {
-        data: data.series.map((p) => p.avg_bpm),
+        label: 'bpm',
+        data: data.series.map((p) => ({ x: p.minute, y: p.avg_bpm })),
         borderColor: '#2f7d4f',
         backgroundColor: '#2f7d4f',
         pointRadius: 0,
@@ -57,11 +80,24 @@ export default function HeartRate({ userId }) {
     ],
   }
 
-  const chartOptions = {
+  const chartOptions = data && {
     responsive: true,
-    plugins: { legend: { display: false } },
+    plugins: {
+      legend: { display: false },
+      annotation: {
+        annotations: {
+          ...periodsToAnnotations(data.sleep_periods, SLEEP_COLOR, 'sleep'),
+          ...periodsToAnnotations(data.exercise_periods, EXERCISE_COLOR, 'exercise'),
+        },
+      },
+    },
     scales: {
-      x: { ticks: { maxTicksLimit: 8 } },
+      x: {
+        type: 'linear',
+        min: 0,
+        max: 1440,
+        ticks: { stepSize: 120, callback: (value) => minutesToLabel(value) },
+      },
       y: { title: { display: true, text: 'bpm' } },
     },
   }
@@ -95,6 +131,19 @@ export default function HeartRate({ userId }) {
               <span className="stat-value">{stat(data.summary.avg_hrv_ms, ' ms')}</span>
             </div>
           </div>
+
+          {(data.sleep_periods.length > 0 || data.exercise_periods.length > 0) && (
+            <div className="stage-legend chart-legend">
+              <span className="stage-legend-item">
+                <span className="stage-swatch" style={{ backgroundColor: SLEEP_COLOR }} />
+                Sleep
+              </span>
+              <span className="stage-legend-item">
+                <span className="stage-swatch" style={{ backgroundColor: EXERCISE_COLOR }} />
+                Exercise
+              </span>
+            </div>
+          )}
 
           {data.series.length > 0 ? (
             <div className="chart-wrap">

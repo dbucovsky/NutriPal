@@ -183,6 +183,10 @@
   max-width: 100%;
 }
 
+.chart-legend {
+  margin-bottom: 8px;
+}
+
 /* Sleep */
 
 .sleep-session {

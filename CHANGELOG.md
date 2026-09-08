@@ -1,5 +1,11 @@
 # Changelog
 
+## V0.1.2 — 2026-09-08 18:45
+### Changes
+- The Heart Rate chart now overlays sleep (blue) and exercise (orange) periods as shaded background bands directly on the bpm timeline, so correlations (a heart-rate spike during a walk, the overnight low during sleep) are visible at a glance — verified against real data: both exercise bands lined up exactly with the two heart-rate spikes on a real day, and the sleep band lined up with the overnight low.
+- Required switching the chart's x-axis from category labels to a linear "minutes since local midnight" scale (0–1440) so the bpm line and the overlay boxes share one coordinate system (`chartjs-plugin-annotation`, a new small dependency).
+- `public/api/heart-rate.php` now also returns `exercise_periods`/`sleep_periods`, clipped to the current day's [0, 1440] window (a sleep session that started the evening before gets clipped to start at 0) using an *overlap* query — does the session touch this day's window at all — which is deliberately looser than `exercise.php`/`sleep.php`'s own single-page day-assignment rules, since a chart overlay should show anything touching the visible window, not just sessions "assigned" to this exact day.
+
 ## V0.1.1 — 2026-09-08 18:15
 ### Changes
 - Added three more pages: **Heart Rate** (resting/avg/min-max bpm + avg HRV stats, plus a day-shaped bpm line chart bucketed into 10-minute averages server-side so the browser never has to chart tens of thousands of raw readings), **Sleep** (session duration, start/end times, and a proportional stage-breakdown bar with a legend), and **Exercise** (a day's sessions with duration/calories/distance/steps/avg heart rate). App now has a simple tab switcher (Food / Heart Rate / Sleep / Exercise) in `App.jsx`.

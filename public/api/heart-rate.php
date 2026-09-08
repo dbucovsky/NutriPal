@@ -6,6 +6,10 @@ declare(strict_types=1);
 // Summary stats (min/max/avg bpm, resting HR, avg HRV) plus a chart-ready
 // series bucketed into 10-minute averages — raw per-reading data can run
 // into the tens of thousands of rows/day, too dense to chart directly.
+// Also returns exercise/sleep periods that OVERLAP this local day at all
+// (not just ones that start/end on it, unlike exercise.php/sleep.php's own
+// day-assignment rules) so the frontend can overlay them on the same
+// minute-of-day timeline as the bpm chart.
 
 require_once __DIR__ . '/../../src/Env.php';
 require_once __DIR__ . '/../../src/Database.php';
@@ -60,15 +64,51 @@ $seriesStmt = $pdo->prepare(
 );
 $seriesStmt->execute([$dayStart, $userId, $dayStart, $dayEnd]);
 
-$tz = new DateTimeZone(Env::get('APP_TIMEZONE', 'UTC'));
-$dayStartLocal = (new DateTimeImmutable($dayStart, new DateTimeZone('UTC')))->setTimezone($tz);
-
 $series = [];
 foreach ($seriesStmt as $row) {
-    $bucketTime = $dayStartLocal->modify('+' . ((int) $row['bucket_idx'] * 10) . ' minutes');
     $series[] = [
-        'time' => $bucketTime->format('H:i'),
+        'minute' => (int) $row['bucket_idx'] * 10,
         'avg_bpm' => round((float) $row['avg_bpm'], 1),
+    ];
+}
+
+// Minutes since local midnight, clipped to [0, 1440] so a session that
+// starts the evening before (sleep) or runs past midnight still overlays
+// cleanly on this single day's 0-1440 chart axis.
+function minutesSinceDayStart(string $utcDateTime, string $utcDayStart): float
+{
+    $seconds = strtotime($utcDateTime) - strtotime($utcDayStart);
+    return max(0, min(1440, $seconds / 60));
+}
+
+$exerciseStmt = $pdo->prepare(
+    "SELECT es.start_time, es.end_time, es.activity_name, at.name AS activity_type
+     FROM exercise_sessions es
+     LEFT JOIN lut_activity_type at ON at.id = es.activity_type_id
+     WHERE es.user_id = ? AND es.start_time < ? AND (es.end_time IS NULL OR es.end_time > ?)"
+);
+$exerciseStmt->execute([$userId, $dayEnd, $dayStart]);
+$exercisePeriods = [];
+foreach ($exerciseStmt as $row) {
+    $endTime = $row['end_time'] ?? $row['start_time'];
+    $exercisePeriods[] = [
+        'start_minute' => minutesSinceDayStart($row['start_time'], $dayStart),
+        'end_minute' => minutesSinceDayStart($endTime, $dayStart),
+        'label' => $row['activity_name'] ?? $row['activity_type'] ?? 'Exercise',
+    ];
+}
+
+$sleepStmt = $pdo->prepare(
+    "SELECT start_time, end_time FROM sleep_sessions
+     WHERE user_id = ? AND start_time < ? AND end_time > ?"
+);
+$sleepStmt->execute([$userId, $dayEnd, $dayStart]);
+$sleepPeriods = [];
+foreach ($sleepStmt as $row) {
+    $sleepPeriods[] = [
+        'start_minute' => minutesSinceDayStart($row['start_time'], $dayStart),
+        'end_minute' => minutesSinceDayStart($row['end_time'], $dayStart),
+        'label' => 'Sleep',
     ];
 }
 
@@ -83,4 +123,6 @@ echo json_encode([
         'reading_count' => (int) $summary['n'],
     ],
     'series' => $series,
+    'exercise_periods' => $exercisePeriods,
+    'sleep_periods' => $sleepPeriods,
 ]);
