@@ -9,6 +9,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../../src/Env.php';
 require_once __DIR__ . '/../../src/Database.php';
+require_once __DIR__ . '/../../src/LocalDay.php';
 
 Env::load(__DIR__ . '/../../.env');
 header('Content-Type: application/json');
@@ -20,26 +21,13 @@ if ($userId <= 0) {
     exit;
 }
 
-$tz = new DateTimeZone(Env::get('APP_TIMEZONE', 'UTC'));
-$dateParam = $_GET['date'] ?? null;
-
 try {
-    $localDay = $dateParam !== null
-        ? new DateTimeImmutable($dateParam, $tz)
-        : new DateTimeImmutable('today', $tz);
+    [$localDate, $dayStart, $dayEnd] = LocalDay::resolve(Env::get('APP_TIMEZONE', 'UTC'), $_GET['date'] ?? null);
 } catch (Exception $e) {
     http_response_code(400);
     echo json_encode(['error' => 'invalid date']);
     exit;
 }
-
-// Local-day bucketing: the requested calendar day's own midnight-to-midnight
-// window, computed in APP_TIMEZONE and converted to UTC for the DB query —
-// NOT a naive UTC DATE() comparison. Confirmed earlier this session (see
-// doc/wiki/Data-Sync.md) that bucketing stored UTC timestamps by raw UTC
-// date misattributes entries near local midnight.
-$dayStart = $localDay->setTime(0, 0, 0)->setTimezone(new DateTimeZone('UTC'));
-$dayEnd = $dayStart->modify('+1 day');
 
 $pdo = Database::connect();
 $stmt = $pdo->prepare(
@@ -56,7 +44,7 @@ $stmt = $pdo->prepare(
      WHERE fle.user_id = ? AND fle.start_time >= ? AND fle.start_time < ?
      ORDER BY fle.start_time"
 );
-$stmt->execute([$userId, $dayStart->format('Y-m-d H:i:s'), $dayEnd->format('Y-m-d H:i:s')]);
+$stmt->execute([$userId, $dayStart, $dayEnd]);
 
 $scaleValue = static function (?string $per100, float $scale): ?float {
     return $per100 === null ? null : round(((float) $per100) * $scale, 2);
@@ -102,7 +90,7 @@ foreach ($totals as $key => $value) {
 }
 
 echo json_encode([
-    'date' => $localDay->format('Y-m-d'),
+    'date' => $localDate,
     'meals' => $hasAny ? array_filter($meals, fn($rows) => !empty($rows)) : new stdClass(),
     'totals' => $totals,
 ]);

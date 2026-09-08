@@ -16,12 +16,28 @@ export async function login(email) {
   return data
 }
 
-export async function getFoodLog(userId, date) {
+async function getJson(endpoint, userId, date, errorLabel) {
   const params = new URLSearchParams({ user_id: userId, date })
-  const res = await fetch(`/api/food-log.php?${params}`)
+  const res = await fetch(`/api/${endpoint}?${params}`)
   const data = await res.json()
   if (!res.ok) {
-    throw new Error(data.error || 'Failed to load food log')
+    throw new Error(data.error || errorLabel)
   }
   return data
+}
+
+export function getFoodLog(userId, date) {
+  return getJson('food-log.php', userId, date, 'Failed to load food log')
+}
+
+export function getHeartRate(userId, date) {
+  return getJson('heart-rate.php', userId, date, 'Failed to load heart rate')
+}
+
+export function getSleep(userId, date) {
+  return getJson('sleep.php', userId, date, 'Failed to load sleep')
+}
+
+export function getExercise(userId, date) {
+  return getJson('exercise.php', userId, date, 'Failed to load exercise')
 }

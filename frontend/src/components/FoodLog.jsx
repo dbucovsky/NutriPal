@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getFoodLog } from '../api'
+import { todayLocal } from '../dateUtils'
+import DateNav from './DateNav'
 
 const MEAL_ORDER = ['BREAKFAST', 'LUNCH', 'DINNER', 'SNACK', 'ANYTIME']
 const MEAL_LABELS = {
@@ -8,19 +10,6 @@ const MEAL_LABELS = {
   DINNER: 'Dinner',
   SNACK: 'Snack',
   ANYTIME: 'Anytime',
-}
-
-function todayLocal() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-function shiftDate(dateStr, days) {
-  // Anchor at UTC noon so adding/subtracting a day never lands on a
-  // different calendar date due to a DST transition.
-  const d = new Date(`${dateStr}T12:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + days)
-  return d.toISOString().slice(0, 10)
 }
 
 function macro(value, unit = 'g') {
@@ -54,11 +43,7 @@ export default function FoodLog({ userId }) {
 
   return (
     <div className="food-log">
-      <div className="date-nav">
-        <button onClick={() => setDate(shiftDate(date, -1))}>&larr;</button>
-        <h2>{date}</h2>
-        <button onClick={() => setDate(shiftDate(date, 1))}>&rarr;</button>
-      </div>
+      <DateNav date={date} onChange={setDate} />
 
       {loading && <p>Loading…</p>}
       {error && <p className="login-error">{error}</p>}

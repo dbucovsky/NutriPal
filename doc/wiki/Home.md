@@ -23,7 +23,7 @@ Tech stack decided (see [[Architecture]]). The database layer is finished and ru
 - **Bulk ingestion**: `scripts/import-health-connect.php` is the active bulk importer (an Android Health Connect export) — Google Takeout was tried first, then dropped as an active source once real gaps surfaced (see [[Database-Schema]]); its importer is kept only as a historical artifact.
 - **Live sync**: `scripts/sync-google-health.php` incrementally syncs the live Google Health API (see [[Data-Sync]]), including gram-accurate nutrition quantities pulled from Google's own food catalog.
 
-**Frontend**: started — `frontend/` (Vite + React) has a first real screen, a day's food log with meal grouping and derived macros, backed by a new minimal JSON API under `public/api/`. See [[Architecture]] for how to run it. Still just one screen with a placeholder (no real security) login — most of the app's actual UI doesn't exist yet.
+**Frontend**: started — `frontend/` (Vite + React) has four real screens (Food, Heart Rate, Sleep, Exercise), each a per-day view backed by its own endpoint under `public/api/`. See [[Architecture]] for how to run it. Still a placeholder (no real security) login, and no way yet to log/edit anything, only browse — most of the app's actual UI doesn't exist yet.
 
 ## Pages
 

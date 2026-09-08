@@ -26,9 +26,13 @@ npm install   # first time only
 npm run dev   # http://localhost:5173
 ```
 
-`frontend/vite.config.js` proxies any `/api/*` request to `http://localhost:8080` (the PHP dev server), so the app can just `fetch('/api/...')` with no CORS handling needed in dev. The PHP side of the API lives under `public/api/` — one file per endpoint (`login.php`, `food-log.php`), matching this project's existing one-file-per-concern style rather than a router/framework. Not wired into `start-services.ps1` yet (that script is XAMPP/PHP-specific per its own header) — start the frontend dev server separately for now.
+`frontend/vite.config.js` proxies any `/api/*` request to `http://localhost:8080` (the PHP dev server), so the app can just `fetch('/api/...')` with no CORS handling needed in dev. The PHP side of the API lives under `public/api/` — one file per endpoint (`login.php`, `food-log.php`, `heart-rate.php`, `sleep.php`, `exercise.php`), matching this project's existing one-file-per-concern style rather than a router/framework. All four data endpoints share `src/LocalDay.php` for local-day bucketing (see below). Not wired into `start-services.ps1` yet (that script is XAMPP/PHP-specific per its own header) — start the frontend dev server separately for now.
 
 There's a placeholder login (`public/api/login.php`, `frontend/src/components/Login.jsx`) with no password/session/security of any kind — it just looks up a real user by email and the frontend remembers the result in `localStorage`. It exists purely to give the frontend a real "current user" concept and exercise a POST round-trip; real authentication is still future work (see "Auth" above).
+
+**Pages so far** (a simple tab switcher in `App.jsx`, no router library yet): Food, Heart Rate, Sleep, Exercise. Each manages its own selected date independently via a shared `frontend/src/components/DateNav.jsx` + `frontend/src/dateUtils.js` (local-day-safe date math, and converting the API's UTC datetime strings to the viewer's local time for display). Heart Rate uses `chart.js`/`react-chartjs-2` (the frontend's first real dependency beyond React itself) for a day's bpm trend — the API pre-buckets raw readings into 10-minute averages server-side (`public/api/heart-rate.php`) rather than shipping tens of thousands of raw points to the browser.
+
+**`src/LocalDay.php`** centralizes the local-day-bucketing logic (see the "Frontend (dev setup...)" note above and `doc/wiki/Data-Sync.md`) so all four endpoints compute it identically instead of repeating the same `DateTimeImmutable`/`DateTimeZone` dance. Sleep uses a different bucketing rule than the other three: a session is shown on the day it *ended* (the "woke up on this day" convention), not the day it started, since sleep sessions usually span midnight.
 
 ## Deployment target (future)
 

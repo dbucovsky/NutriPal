@@ -1,5 +1,16 @@
 # Changelog
 
+## V0.1.1 — 2026-09-08 18:15
+### Changes
+- Added three more pages: **Heart Rate** (resting/avg/min-max bpm + avg HRV stats, plus a day-shaped bpm line chart bucketed into 10-minute averages server-side so the browser never has to chart tens of thousands of raw readings), **Sleep** (session duration, start/end times, and a proportional stage-breakdown bar with a legend), and **Exercise** (a day's sessions with duration/calories/distance/steps/avg heart rate). App now has a simple tab switcher (Food / Heart Rate / Sleep / Exercise) in `App.jsx`.
+- New PHP endpoints `public/api/heart-rate.php`, `sleep.php`, `exercise.php`, alongside a new shared `src/LocalDay.php` extracted from `food-log.php`'s local-day-bucketing logic (now used identically by all four endpoints instead of being repeated). Sleep uses a different bucketing rule than the other three — a session is shown on the day it *ended*, not started, since sessions usually span midnight.
+- Added `chart.js`/`react-chartjs-2` to `frontend/` — the first frontend dependency beyond React itself.
+- New shared frontend pieces: `frontend/src/components/DateNav.jsx` and `frontend/src/dateUtils.js` (date-shifting math anchored at UTC noon to avoid DST off-by-ones, plus converting the API's UTC datetime strings to the viewer's local time for display), extracted from `FoodLog.jsx` since all four pages need the same date-navigation behavior.
+- Verified all three new endpoints against real data and in a real browser (each page, several real dates, empty-state days).
+
+### Known, disclosed limitations
+- All three new pages surface the same already-disclosed Health-Connect/live-API duplication issue as the food log does — e.g. a night's sleep or a walk shows up twice (once per source) on days covered by both. Confirms this is a real, pervasive, cross-category symptom now visible in every page, not just food — raises the priority of an actual reconciliation fix.
+
 ## V0.1.0 — 2026-09-08 17:30
 ### Changes
 - **Started the frontend** — the first real application screen exists. New `frontend/` (Vite + React, plain JavaScript): a day's food log with meal grouping (Breakfast/Lunch/Dinner/Snack/Anytime), real-world serving labels, and derived macros per entry plus a daily total. Date navigation (prev/next day) included.
