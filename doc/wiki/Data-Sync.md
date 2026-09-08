@@ -65,9 +65,28 @@ No data in this account: `vo2-max`, `blood-glucose` (expected — not tracked by
 
 **Takeaway:** steps, distance, exercise, heart rate, sleep, and weight all have solid real data and are viable to build out next. Oxygen saturation and body fat are populated but sparse. VO2 max and blood glucose aren't tracked at all currently.
 
-## Open items (to resolve during implementation)
+## Sync implementation (done, verified against the real account, 2026-09-08)
 
-- Google Health API request/sync rate limits — check before finalizing sync frequency.
-- Local MySQL schema for food entries (per-item log vs. daily aggregate, which macro/micronutrient fields to store) — and swap `TokenStore`'s JSON file for a database-backed store once that schema exists.
-- A **Web application**-type OAuth client now exists and is verified working (see `doc/credentials/google-health.md`); a production redirect URI for Bluehost will need to be added to it once deployment happens.
-- Actual food/nutrition data fetch is proven working (see above) but only as an exploratory CLI script (`scripts/fetch-nutrition-test.php`) — not yet integrated into the app or persisted to a database.
+`scripts/sync-google-health.php` implements the incremental/full-resync design above, against the schema finalized in `sql/schema.sql` (see `doc/wiki/Database-Schema.md`) — all 9 categories the schema supports, not just food. Usage: no flags (default, last 7 days), `--days=N`, or `--full`.
+
+**Two dedup strategies**, decided by what the live API actually returns (checked directly, not assumed):
+- `nutrition-log`, `sleep`, `exercise`, `weight`, `height` — each dataPoint's `name` field ends in a stable numeric ID, so these get a real upsert: look up by `(user_id, api_uid)`, insert if missing, update only if a real column value actually changed (avoids writing pointless history snapshots on a routine re-sync of unchanged data).
+- `daily-resting-heart-rate` — no stable per-point ID, but the schema already has a real natural key (`UNIQUE(user_id, reading_date)`) — same upsert-if-changed approach, keyed on that instead.
+- `steps`, `heart-rate`, `heart-rate-variability` — confirmed these dataPoints have **no** `name`/ID field at all, and the schema's `BEFORE DELETE` trigger rules out a delete-and-reinsert reconcile. Dedup here is insert-missing against existing `reading_time` values, not a true reconcile — accepted since this is passively-sampled continuous sensor data that isn't realistically edited after the fact, unlike user-editable food/sleep/exercise/weight. This is a deliberate, disclosed scope reduction from the "reconcile" language above for these three types specifically.
+
+**Nutrition gets real gram-accurate serving units**, closing the gap the Health Connect importer's quantity-problem fix had to placeholder around (see `doc/wiki/Database-Schema.md`'s "quantity problem" section): each `nutrition-log` entry's `food` reference is fetched (`GET dataTypes/food/dataPoints/{id}`, cached per run) for its `servings[]` list, and true grams for whatever unit was actually logged are derived using the list's `"gram"` entry as a pivot (`gramsPerUnit(u) = multiplier(u) / multiplier(gram)`). Verified against real data: "1 tortilla" → ~51g (matching a hand-computed check from the earlier comparison pass), "1 medium apple" → 167g, "1 oz" → 28g, "1 egg" → 50g. Falls back to the Health Connect importer's ratio-based placeholder-unit approach when a food has no gram entry or the logged unit isn't listed.
+
+**Two real bugs found by actually running this against the account, not just reviewing the code:**
+- `exercise_sessions.distance` `DECIMAL(10,4)` overflowed on ordinary walking distances once populated with real millimeter-scale values from the API (a 6km walk = 6,148,000mm, 7 digits, exceeding the column's 6-integer-digit budget) — MySQL silently clamped every value to `999999.9999`, which also broke idempotency (the clamped value never matched the real incoming value, so every re-sync issued a pointless update forever). Root cause was really a unit mismatch: this column also holds Takeout's miles at a wildly different scale. Fixed by standardizing `distance` to **meters** at ingest for every source (new `unit_conversions` row) rather than widening the column — confirmed via MySQL's DECIMAL storage formula that `DECIMAL(14,0)` and `DECIMAL(14,4)` cost the identical 7 bytes (storage is driven by total digit count, not decimal placement), so widening alone would have bought nothing and still cost Takeout's fractional-mile precision.
+- `lut_data_source.name` uses a case-insensitive collation (MySQL default), so the live API's `"FITBIT"` (from `dataSource.platform`) collided with Health Connect's already-imported `"Fitbit"` (an app display name) as duplicates at the DB level, even though the in-memory PHP cache treated them as different strings and attempted a fresh insert. Fixed by catching that specific duplicate-key error and re-resolving the existing row.
+
+**Verified idempotent**: ran the sync three times in a row against the same 2-day window; the third run reported no real change for every row in every category before running the real default 7-day sync.
+
+## Open items
+
+- **Cross-source duplication between Health Connect and the live API is not resolved.** Health Connect's `api_uid` (its own local `uuid`) and the live API's `api_uid` (its cloud dataPoint id) are different ID spaces for the same real-world event — `UNIQUE(user_id, api_uid)` can't detect a sleep session / exercise session / weight reading / food log entry already exists from the other source. No automated mitigation yet; the practical guidance until real reconciliation is designed is to pick a sync window that starts after the last Health Connect export's own coverage.
+- Real-gram custom units created by the live-API sync are not retroactively used to correct Health-Connect-created placeholder units for what might be the same real food — tracked as future work, not attempted here.
+- `--full` mode's logic was reviewed but not exercised against the real account's entire history (would mostly re-cover what the Health Connect bulk import already has, and take a long time against years of heart-rate data).
+- `lut_activity_type` mapping stays a plain find-or-create keyed on each source's raw activity code — no canonical cross-source mapping yet.
+- Google Health API request/sync rate limits were never explicitly checked — no throttling has been hit in testing so far, but this hasn't been run at a truly high frequency either.
+- A **Web application**-type OAuth client exists and is verified working (see `doc/credentials/google-health.md`); a production redirect URI for Bluehost will need to be added once deployment happens.

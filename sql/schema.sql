@@ -1142,8 +1142,16 @@ CREATE TABLE nutripal_hist.measurements_hist (
 -- captures the same "which device/app" concept everywhere else (confirmed:
 -- Takeout's exercise source.name and the API's dataSource.device.displayName
 -- are the same single concept, not two).
--- distance_unit is unit_conversions-backed, not free text — Takeout genuinely
--- varies units (miles observed) while the API always reports millimeters.
+-- distance_unit_id is unit_conversions-backed, not free text. Ingest always
+-- normalizes to METERS regardless of source (the live API reports
+-- millimeters, Takeout reports miles) — pairing a millimeter-scale value
+-- from one source with a mile-scale value from the other in the same
+-- DECIMAL column made the precision budget unworkable (a real bug found
+-- via sync-google-health.php: DECIMAL(10,4)'s 6 integer digits overflowed
+-- on a routine few-km walk expressed in millimeters). distance_unit_id is
+-- kept (not hardcoded/dropped) for consistency with this schema's general
+-- pattern of always pairing a quantity with an explicit unit reference,
+-- even though in practice it will always resolve to 'meter' going forward.
 -- has_gps promoted to a real column — present in both sources consistently,
 -- cheap and useful for filtering without parsing raw_details JSON.
 CREATE TABLE exercise_sessions (

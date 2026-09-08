@@ -1,0 +1,1043 @@
+<?php
+
+declare(strict_types=1);
+
+// Syncs the live Google Health API into the same schema/tables the Health
+// Connect bulk importer (scripts/import-health-connect.php) populates.
+//
+// Usage:
+//   php scripts/sync-google-health.php            (incremental: last 7 days)
+//   php scripts/sync-google-health.php --days=N    (incremental: last N days)
+//   php scripts/sync-google-health.php --full      (entire available history)
+//
+// Two genuinely different sync strategies, per category, confirmed against
+// real API responses (storage/debug-metrics/*.json) rather than assumed:
+//
+//   - nutrition-log, sleep, exercise, weight, height: each dataPoint's
+//     `name` field ends in a stable numeric ID -> real upsert via api_uid
+//     (SELECT by (user_id, api_uid); INSERT if missing; UPDATE only if a
+//     real column actually differs, so a routine re-sync of unchanged old
+//     data doesn't spam the history trigger with no-op snapshots).
+//   - daily-resting-heart-rate: no stable per-point ID, but the schema
+//     already has a real natural key, UNIQUE(user_id, reading_date) -> same
+//     upsert-if-changed approach, keyed on that instead of api_uid.
+//   - steps, heart-rate, heart-rate-variability: NO stable ID of any kind
+//     (confirmed: no `name` field on these dataPoints at all), and this
+//     schema's BEFORE DELETE trigger makes a delete-and-reinsert reconcile
+//     impossible. Disclosed scope reduction: dedup here is INSERT-MISSING,
+//     not a true reconcile — one indexed SELECT of existing reading_time
+//     values across the window, then skip any incoming point already
+//     present (regardless of which source put it there — this is what
+//     stops the routine sync from re-duplicating whatever the Health
+//     Connect bulk import already covered). This is fine in practice
+//     because passively-sampled continuous sensor data is not realistically
+//     ever edited after the fact, unlike food/sleep/exercise/weight.
+//
+// KNOWN, DISCLOSED GAP (not solved here): Health Connect's api_uid (its own
+// local `uuid`) and this script's api_uid (the live API's cloud dataPoint
+// id) are different ID spaces for the exact same real-world event, so the
+// UNIQUE(user_id, api_uid) constraint cannot detect that a sleep session /
+// exercise session / weight reading / food log entry already exists from
+// the OTHER source. Same class of problem as the already-documented,
+// already-deferred "upsert priority across sources" open item. Practical
+// guidance until real cross-source reconciliation is designed: pick a
+// --days/--full window for the first run that starts after whatever the
+// last Health Connect export already covered, to avoid overlap.
+//
+// Nutrition additionally fetches the referenced `food` resource per entry
+// (cached per run) to compute REAL gram-per-serving-unit conversions,
+// rather than the placeholder "100" unit the Health Connect importer has to
+// use (HC reports no serving/quantity at all; the live API does). Falls
+// back to the same ratio-based placeholder-unit approach as
+// import-health-connect.php's findOrCreateFood() when the food resource
+// has no gram entry or the log's unit can't be matched.
+//
+// mixed-conflict resolution stays unbuilt, as already documented elsewhere
+// — this sync only overwrites-if-different for its own re-runs, it doesn't
+// detect or record a genuine value disagreement between two sources.
+
+require __DIR__ . '/../src/Env.php';
+require __DIR__ . '/../src/GoogleOAuth.php';
+require __DIR__ . '/../src/TokenStore.php';
+require __DIR__ . '/../src/Database.php';
+
+Env::load(__DIR__ . '/../.env');
+
+$isFull = in_array('--full', $argv, true);
+$days = 7;
+foreach ($argv as $arg) {
+    if (preg_match('/^--days=(\d+)$/', $arg, $m)) {
+        $days = (int) $m[1];
+    }
+}
+
+$logDir = __DIR__ . '/../storage/import-logs';
+if (!is_dir($logDir)) {
+    mkdir($logDir, 0777, true);
+}
+$logPath = $logDir . '/sync-google-health-' . date('Ymd-His') . '.log';
+$logFile = fopen($logPath, 'w');
+
+$runStats = [];
+$startedAt = microtime(true);
+
+function logLine(string $message): void
+{
+    global $logFile;
+    $line = '[' . date('Y-m-d H:i:s') . '] ' . $message;
+    echo $line . "\n";
+    fwrite($logFile, $line . "\n");
+}
+
+function bumpStat(string $category, string $key, int $by = 1): void
+{
+    global $runStats;
+    $runStats[$category][$key] = ($runStats[$category][$key] ?? 0) + $by;
+}
+
+logLine("=== NutriPal Google Health API sync starting ===");
+logLine($isFull ? "Mode: FULL resync (entire available history)" : "Mode: incremental, last {$days} day(s)");
+logLine("Log: {$logPath}");
+
+$tokenStore = new TokenStore(__DIR__ . '/../storage/google-tokens.json');
+$tokens = $tokenStore->load();
+if ($tokens === null || !isset($tokens['refresh_token'])) {
+    logLine("ERROR: no stored tokens with a refresh_token. Run the OAuth flow (auth-login.php) first.");
+    exit(1);
+}
+
+$oauth = new GoogleOAuth(
+    clientId: Env::require('GOOGLE_CLIENT_ID'),
+    clientSecret: Env::require('GOOGLE_CLIENT_SECRET'),
+    redirectUri: Env::require('GOOGLE_REDIRECT_URI')
+);
+$refreshed = $oauth->refreshAccessToken($tokens['refresh_token']);
+$tokenStore->save($refreshed);
+$accessToken = $refreshed['access_token'];
+
+$pdo = Database::connect();
+logLine("Connected to MySQL database " . Env::get('DB_NAME'));
+
+$userId = 2;
+$cutoff = $isFull ? null : (new DateTimeImmutable('today', new DateTimeZone('UTC')))->modify("-{$days} days");
+
+// ----------------------------------------------------------------------------
+// Lookup caches
+// ----------------------------------------------------------------------------
+
+function loadLookup(PDO $pdo, string $table, string $column = 'name'): array
+{
+    $map = [];
+    foreach ($pdo->query("SELECT id, {$column} FROM {$table}") as $row) {
+        $map[$row[$column]] = (int) $row['id'];
+    }
+    return $map;
+}
+
+$mealTypeIds = loadLookup($pdo, 'lut_meal_type');
+$nutrientIds = loadLookup($pdo, 'lut_nutrient');
+$unitIds = loadLookup($pdo, 'unit_conversions');
+$sleepStageTypeIds = loadLookup($pdo, 'lut_sleep_stage_type');
+$sleepTypeIds = loadLookup($pdo, 'lut_sleep_type');
+$recordingMethodIds = loadLookup($pdo, 'lut_recording_method');
+$measurementTypeIds = loadLookup($pdo, 'lut_measurement_type');
+$dataSourceIds = loadLookup($pdo, 'lut_data_source');
+$activityTypeIds = loadLookup($pdo, 'lut_activity_type');
+$calcMethodIds = loadLookup($pdo, 'lut_heart_rate_calc_method');
+$ingestionSourceApi = (int) $pdo->query("SELECT id FROM lut_ingestion_source WHERE name='google_health_api'")->fetchColumn();
+$gramUnitId = $unitIds['gram'];
+$mmUnitId = $unitIds['millimeter'];
+$meterUnitId = $unitIds['meter'];
+$massDimensionId = (int) $pdo->query("SELECT id FROM lut_dimension WHERE name='mass'")->fetchColumn();
+
+logLine("Lookup caches loaded: " . count($mealTypeIds) . " meal types, " . count($nutrientIds) . " nutrients, "
+    . count($dataSourceIds) . " known data sources");
+
+$insertDataSource = $pdo->prepare("INSERT INTO lut_data_source (name) VALUES (?)");
+function findOrCreateDataSource(?string $name, PDO $pdo, array &$cache, PDOStatement $insertStmt): ?int
+{
+    if ($name === null || $name === '') {
+        return null;
+    }
+    if (isset($cache[$name])) {
+        return $cache[$name];
+    }
+    try {
+        $insertStmt->execute([$name]);
+        $id = (int) $pdo->lastInsertId();
+    } catch (PDOException $e) {
+        if ((int) ($e->errorInfo[1] ?? 0) !== 1062) {
+            throw $e;
+        }
+        // lut_data_source.name uses a case-insensitive collation (matches
+        // MySQL default) — a source can report the same real device/app
+        // under different casing (e.g. Health Connect's app name "Fitbit"
+        // vs. the live API's dataSource.platform "FITBIT"). Look up the
+        // row the collation already considers this a duplicate of.
+        $find = $pdo->prepare("SELECT id FROM lut_data_source WHERE name = ?");
+        $find->execute([$name]);
+        $id = (int) $find->fetchColumn();
+    }
+    $cache[$name] = $id;
+    return $id;
+}
+
+$insertActivityType = $pdo->prepare("INSERT INTO lut_activity_type (name) VALUES (?)");
+function findOrCreateActivityType(?string $name, PDO $pdo, array &$cache, PDOStatement $insertStmt): ?int
+{
+    if ($name === null || $name === '') {
+        return null;
+    }
+    if (isset($cache[$name])) {
+        return $cache[$name];
+    }
+    try {
+        $insertStmt->execute([$name]);
+        $id = (int) $pdo->lastInsertId();
+    } catch (PDOException $e) {
+        if ((int) ($e->errorInfo[1] ?? 0) !== 1062) {
+            throw $e;
+        }
+        $find = $pdo->prepare("SELECT id FROM lut_activity_type WHERE name = ?");
+        $find->execute([$name]);
+        $id = (int) $find->fetchColumn();
+    }
+    $cache[$name] = $id;
+    return $id;
+}
+
+// ----------------------------------------------------------------------------
+// Shared helpers
+// ----------------------------------------------------------------------------
+
+function toMysqlDateTime(string $iso): string
+{
+    return (new DateTimeImmutable($iso))->format('Y-m-d H:i:s');
+}
+
+function civilDate(array $date): string
+{
+    return sprintf('%04d-%02d-%02d', $date['year'], $date['month'], $date['day']);
+}
+
+function apiUidFrom(array $point): ?string
+{
+    if (!isset($point['name'])) {
+        return null;
+    }
+    $slash = strrpos($point['name'], '/');
+    return $slash === false ? $point['name'] : substr($point['name'], $slash + 1);
+}
+
+function dataSourceLabel(array $point): ?string
+{
+    return $point['dataSource']['device']['displayName'] ?? $point['dataSource']['platform'] ?? null;
+}
+
+/** Extracts the best-available date out of a data point, for client-side cutoff filtering during pagination. */
+function pointCivilDate(string $bodyKey, array $point): ?DateTimeImmutable
+{
+    $body = $point[$bodyKey] ?? null;
+    if ($body === null) {
+        return null;
+    }
+    if (isset($body['interval']['civilStartTime']['date'])) {
+        return new DateTimeImmutable(civilDate($body['interval']['civilStartTime']['date']));
+    }
+    if (isset($body['sampleTime']['civilTime']['date'])) {
+        return new DateTimeImmutable(civilDate($body['sampleTime']['civilTime']['date']));
+    }
+    if (isset($body['date'])) {
+        return new DateTimeImmutable(civilDate($body['date']));
+    }
+    if (isset($body['interval']['startTime'])) {
+        return new DateTimeImmutable(substr($body['interval']['startTime'], 0, 10), new DateTimeZone('UTC'));
+    }
+    if (isset($body['sampleTime']['physicalTime'])) {
+        return new DateTimeImmutable(substr($body['sampleTime']['physicalTime'], 0, 10), new DateTimeZone('UTC'));
+    }
+    return null;
+}
+
+/**
+ * Streams every dataPoint for one Google Health data type, newest-first,
+ * calling $onPoint per point. Stops at $cutoff (client-side, since only
+ * some data types accept server-side interval filtering) or, in full mode
+ * ($cutoff === null), once the API stops returning pages.
+ */
+function streamDataPoints(string $accessToken, string $dataType, string $bodyKey, ?DateTimeImmutable $cutoff, callable $onPoint): void
+{
+    $pageToken = null;
+    $maxPages = 20000;
+
+    for ($page = 0; $page < $maxPages; $page++) {
+        $params = ['pageSize' => 500];
+        if ($pageToken !== null) {
+            $params['pageToken'] = $pageToken;
+        }
+        $url = 'https://health.googleapis.com/v4/users/me/dataTypes/' . $dataType . '/dataPoints?' . http_build_query($params);
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $accessToken, 'Accept: application/json'],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 30,
+        ]);
+        $body = curl_exec($ch);
+        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($body === false || $status !== 200) {
+            logLine("ERROR fetching {$dataType} page {$page}: HTTP {$status}");
+            return;
+        }
+        $result = json_decode($body, true) ?? [];
+        $points = $result['dataPoints'] ?? [];
+        if (empty($points)) {
+            return;
+        }
+
+        $reachedCutoff = false;
+        foreach ($points as $point) {
+            if ($cutoff !== null) {
+                $date = pointCivilDate($bodyKey, $point);
+                if ($date !== null && $date < $cutoff) {
+                    $reachedCutoff = true;
+                    continue;
+                }
+            }
+            $onPoint($point);
+        }
+
+        $pageToken = $result['nextPageToken'] ?? null;
+        if ($reachedCutoff || $pageToken === null || $pageToken === '') {
+            return;
+        }
+    }
+    logLine("WARN {$dataType}: hit the {$maxPages}-page safety cap without exhausting pagination");
+}
+
+/**
+ * Generic upsert for the categories with a real native ID (or, for
+ * daily_resting_heart_rate, a real natural key). $data is compared against
+ * the existing row (if any) with a small numeric tolerance; an UPDATE is
+ * only issued if something actually differs, so routine re-syncs of
+ * unchanged data don't spam the history trigger with no-op snapshots.
+ * $provenance (changed_by/changed_by_user_id/db_ts) is stamped only when a
+ * real update happens.
+ */
+function upsertByNaturalKey(PDO $pdo, string $table, array $whereCols, array $whereVals, array $data, array $provenance): string
+{
+    $whereSql = implode(' AND ', array_map(fn($c) => "{$c} = ?", $whereCols));
+    $stmt = $pdo->prepare("SELECT * FROM {$table} WHERE {$whereSql}");
+    $stmt->execute($whereVals);
+    $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($existing === false) {
+        $cols = array_merge($whereCols, array_keys($data));
+        $vals = array_merge($whereVals, array_values($data));
+        $placeholders = implode(',', array_fill(0, count($cols), '?'));
+        $pdo->prepare("INSERT INTO {$table} (" . implode(',', $cols) . ") VALUES ({$placeholders})")->execute($vals);
+        return 'inserted';
+    }
+
+    $changed = [];
+    foreach ($data as $col => $val) {
+        $old = $existing[$col] ?? null;
+        if ($val === null && $old === null) {
+            continue;
+        }
+        if (is_numeric($val) && is_numeric($old)) {
+            if (abs((float) $old - (float) $val) > 0.0005) {
+                $changed[$col] = $val;
+            }
+        } elseif ((string) $old !== (string) $val) {
+            $changed[$col] = $val;
+        }
+    }
+    if (empty($changed)) {
+        return 'skipped';
+    }
+    $changed = array_merge($changed, $provenance);
+    $setSql = implode(', ', array_map(fn($c) => "{$c} = ?", array_keys($changed)));
+    $pdo->prepare("UPDATE {$table} SET {$setSql} WHERE {$whereSql}")->execute(array_merge(array_values($changed), $whereVals));
+    return 'updated';
+}
+
+function provenanceNow(int $userId): array
+{
+    return [
+        'db_ts' => date('Y-m-d H:i:s'),
+        'changed_by' => 'sync-google-health.php',
+        'changed_by_user_id' => $userId,
+    ];
+}
+
+// ----------------------------------------------------------------------------
+// 1. Nutrition -> food_log_entries / foods_db
+// ----------------------------------------------------------------------------
+
+const HC_STYLE_NUTRIENT_KEYS = [
+    'SODIUM', 'POTASSIUM', 'DIETARY_FIBER', 'SUGAR', 'CALCIUM', 'IRON', 'VITAMIN_A', 'VITAMIN_C',
+    'CHOLESTEROL', 'SATURATED_FAT', 'TRANS_FAT', 'BIOTIN', 'COPPER', 'FOLIC_ACID', 'IODINE',
+    'MAGNESIUM', 'NIACIN', 'PANTOTHENIC_ACID', 'PHOSPHORUS', 'RIBOFLAVIN', 'THIAMIN', 'VITAMIN_B12',
+    'VITAMIN_B6', 'VITAMIN_D', 'VITAMIN_E', 'ZINC', 'MANGANESE', 'SELENIUM', 'CHLORIDE', 'MOLYBDENUM',
+    'CHROMIUM', 'VITAMIN_K', 'CAFFEINE', 'FOLATE',
+];
+
+/** Fetches the referenced `food` resource once (cached per run) and returns its servings, keyed by lowercased unit display name (singular and plural both map to the same entry). */
+function fetchFoodServings(string $accessToken, string $foodRef, array &$cache): ?array
+{
+    if (array_key_exists($foodRef, $cache)) {
+        return $cache[$foodRef];
+    }
+    $url = 'https://health.googleapis.com/v4/' . $foodRef;
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $accessToken, 'Accept: application/json'],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    $body = curl_exec($ch);
+    $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($body === false || $status !== 200) {
+        $cache[$foodRef] = null;
+        return null;
+    }
+    $decoded = json_decode($body, true);
+    $servings = $decoded['food']['servings'] ?? [];
+
+    $gramMultiplier = null;
+    $byUnit = [];
+    foreach ($servings as $s) {
+        $mult = $s['multiplier'] ?? null;
+        if ($mult === null) {
+            continue;
+        }
+        foreach (['foodMeasurementUnitDisplayName', 'foodMeasurementUnitDisplayNamePlural'] as $nameField) {
+            if (isset($s[$nameField])) {
+                $byUnit[strtolower($s[$nameField])] = (float) $mult;
+            }
+        }
+        if (isset($s['foodMeasurementUnitDisplayName']) && strtolower($s['foodMeasurementUnitDisplayName']) === 'gram') {
+            $gramMultiplier = (float) $mult;
+        }
+    }
+
+    $result = ($gramMultiplier === null || $gramMultiplier <= 0) ? null : ['gramMultiplier' => $gramMultiplier, 'byUnit' => $byUnit];
+    $cache[$foodRef] = $result;
+    return $result;
+}
+
+/** Real grams for one unit of $unitLabel, using the food's own "gram" entry as a pivot. Null if the unit isn't listed. */
+function resolveGramsPerUnit(array $foodServings, string $unitLabel): ?float
+{
+    $mult = $foodServings['byUnit'][strtolower($unitLabel)] ?? null;
+    if ($mult === null) {
+        return null;
+    }
+    return $mult / $foodServings['gramMultiplier'];
+}
+
+/** Same ratio-based fallback import-health-connect.php's findOrCreateFood() uses, for when real grams can't be resolved. */
+function findOrCreateFoodFallback(PDO $pdo, int $userId, int $massDimensionId, string $name,
+    ?float $energyKcal, ?float $proteinG, ?float $carbG, ?float $fatG,
+    array $micronutrients, array &$nutrientIds, int $gramUnitId, array &$servingUnitCache): array
+{
+    $existing = $pdo->prepare(
+        "SELECT id, version, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g
+         FROM foods_db WHERE name = ? AND brand_name IS NULL AND dimension_id = ? AND user_id = ?
+         ORDER BY COALESCE(version, 0) DESC"
+    );
+    $existing->execute([$name, $massDimensionId, $userId]);
+    $candidates = $existing->fetchAll(PDO::FETCH_ASSOC);
+
+    $impliedRatio = function (?float $incoming, ?float $baseline): ?float {
+        if ($incoming === null || $baseline === null || abs($baseline) < 0.001) {
+            return null;
+        }
+        return $incoming / $baseline;
+    };
+
+    foreach ($candidates as $row) {
+        $ratios = array_filter([
+            $impliedRatio($energyKcal, $row['energy_kcal'] !== null ? (float) $row['energy_kcal'] : null),
+            $impliedRatio($proteinG, $row['total_protein_g'] !== null ? (float) $row['total_protein_g'] : null),
+            $impliedRatio($carbG, $row['total_carbohydrate_g'] !== null ? (float) $row['total_carbohydrate_g'] : null),
+            $impliedRatio($fatG, $row['total_fat_g'] !== null ? (float) $row['total_fat_g'] : null),
+        ], fn($r) => $r !== null && $r > 0);
+
+        if (count($ratios) === 0) {
+            continue;
+        }
+        sort($ratios);
+        $median = $ratios[intdiv(count($ratios), 2)];
+        $consistent = true;
+        foreach ($ratios as $r) {
+            if (abs($r - $median) > $median * 0.15) {
+                $consistent = false;
+                break;
+            }
+        }
+        if ($consistent) {
+            $foodId = (int) $row['id'];
+            $servingUnitId = $servingUnitCache[$foodId] ?? null;
+            if ($servingUnitId === null) {
+                // Matched a food created by a previous run (or by the
+                // Health Connect importer) whose custom unit isn't in this
+                // run's in-memory cache — look it up rather than fail.
+                $lookup = $pdo->prepare(
+                    "SELECT lsu.id FROM lut_serving_unit lsu
+                     JOIN foods_db_custom_units fdcu ON fdcu.id = lsu.foods_db_custom_unit_id
+                     WHERE fdcu.food_id = ? ORDER BY fdcu.is_default DESC LIMIT 1"
+                );
+                $lookup->execute([$foodId]);
+                $servingUnitId = (int) $lookup->fetchColumn();
+                $servingUnitCache[$foodId] = $servingUnitId;
+            }
+            return [$foodId, false, round($median, 4), $servingUnitId];
+        }
+    }
+
+    $latestVersion = empty($candidates) ? null : ((int) $candidates[0]['version']);
+    $newVersion = $latestVersion === null ? null : ($latestVersion + 1);
+    $insert = $pdo->prepare(
+        "INSERT INTO foods_db (name, dimension_id, version, group_id, user_id, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g)
+         VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)"
+    );
+    $insert->execute([$name, $massDimensionId, $newVersion, $userId, $energyKcal, $proteinG, $carbG, $fatG]);
+    $foodId = (int) $pdo->lastInsertId();
+    insertFoodNutrients($pdo, $foodId, $micronutrients, $nutrientIds, $gramUnitId);
+
+    $servingUnitId = getOrCreateCustomUnit($pdo, $foodId, 'reported serving', 100.0, "api_reported_serving_{$foodId}", true);
+    $servingUnitCache[$foodId] = $servingUnitId;
+    return [$foodId, true, 1.0, $servingUnitId];
+}
+
+function insertFoodNutrients(PDO $pdo, int $foodId, array $micronutrients, array &$nutrientIds, int $gramUnitId): void
+{
+    if (empty($micronutrients)) {
+        return;
+    }
+    $insertNutrient = $pdo->prepare("INSERT INTO foods_db_nutrients (food_id, nutrient_id, quantity, unit_id) VALUES (?, ?, ?, ?)");
+    foreach ($micronutrients as $nutrientName => $qty) {
+        if (!isset($nutrientIds[$nutrientName])) {
+            continue;
+        }
+        $insertNutrient->execute([$foodId, $nutrientIds[$nutrientName], $qty, $gramUnitId]);
+    }
+}
+
+function getOrCreateCustomUnit(PDO $pdo, int $foodId, string $unitName, float $equivalentAmount, string $servingUnitLabel, bool $isDefault): int
+{
+    $find = $pdo->prepare("SELECT id FROM foods_db_custom_units WHERE food_id = ? AND unit_name = ?");
+    $find->execute([$foodId, $unitName]);
+    $customUnitId = $find->fetchColumn();
+
+    if ($customUnitId === false) {
+        $insert = $pdo->prepare("INSERT INTO foods_db_custom_units (food_id, unit_name, equivalent_amount, is_default) VALUES (?, ?, ?, ?)");
+        $insert->execute([$foodId, $unitName, $equivalentAmount, $isDefault ? 1 : 0]);
+        $customUnitId = (int) $pdo->lastInsertId();
+    } else {
+        $customUnitId = (int) $customUnitId;
+    }
+
+    $findServingUnit = $pdo->prepare("SELECT id FROM lut_serving_unit WHERE foods_db_custom_unit_id = ?");
+    $findServingUnit->execute([$customUnitId]);
+    $servingUnitId = $findServingUnit->fetchColumn();
+    if ($servingUnitId !== false) {
+        return (int) $servingUnitId;
+    }
+
+    $insertServingUnit = $pdo->prepare("INSERT INTO lut_serving_unit (label, foods_db_custom_unit_id) VALUES (?, ?)");
+    $insertServingUnit->execute([$servingUnitLabel, $customUnitId]);
+    return (int) $pdo->lastInsertId();
+}
+
+/**
+ * Real-gram nutrition matching: since the live API gives a genuine serving
+ * quantity (unlike Health Connect), normalizing to per-100g from a SINGLE
+ * entry is exact, not ratio-inferred. Falls back to
+ * findOrCreateFoodFallback() when the food resource has no usable gram
+ * conversion. Returns [foodId, wasNewVersion, servingAmount, servingUnitId].
+ */
+function findOrCreateFoodReal(PDO $pdo, int $userId, int $massDimensionId, string $name,
+    float $gramsForEntry, float $servingAmount, string $unitLabel, float $gramsPerUnit,
+    ?float $energyKcal, ?float $proteinG, ?float $carbG, ?float $fatG,
+    array $micronutrients, array &$nutrientIds, int $gramUnitId): array
+{
+    $scale = fn(?float $v): ?float => $v === null ? null : ($v / $gramsForEntry * 100);
+    $energyPer100 = $scale($energyKcal);
+    $proteinPer100 = $scale($proteinG);
+    $carbPer100 = $scale($carbG);
+    $fatPer100 = $scale($fatG);
+    $microPer100 = [];
+    foreach ($micronutrients as $n => $v) {
+        $microPer100[$n] = $v / $gramsForEntry * 100;
+    }
+
+    $existing = $pdo->prepare(
+        "SELECT id, version, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g
+         FROM foods_db WHERE name = ? AND brand_name IS NULL AND dimension_id = ? AND user_id = ?
+         ORDER BY COALESCE(version, 0) DESC"
+    );
+    $existing->execute([$name, $massDimensionId, $userId]);
+    $candidates = $existing->fetchAll(PDO::FETCH_ASSOC);
+
+    $closeEnough = function (?float $a, ?float $b): bool {
+        if ($a === null && $b === null) {
+            return true;
+        }
+        if ($a === null || $b === null) {
+            return false;
+        }
+        $base = max(abs($a), abs($b), 0.5);
+        return abs($a - $b) / $base <= 0.05;
+    };
+
+    $foodId = null;
+    $isNew = false;
+    foreach ($candidates as $row) {
+        if ($closeEnough($energyPer100, $row['energy_kcal'] !== null ? (float) $row['energy_kcal'] : null)
+            && $closeEnough($proteinPer100, $row['total_protein_g'] !== null ? (float) $row['total_protein_g'] : null)
+            && $closeEnough($carbPer100, $row['total_carbohydrate_g'] !== null ? (float) $row['total_carbohydrate_g'] : null)
+            && $closeEnough($fatPer100, $row['total_fat_g'] !== null ? (float) $row['total_fat_g'] : null)) {
+            $foodId = (int) $row['id'];
+            break;
+        }
+    }
+
+    if ($foodId === null) {
+        $isNew = true;
+        $latestVersion = empty($candidates) ? null : ((int) $candidates[0]['version']);
+        $newVersion = $latestVersion === null ? null : ($latestVersion + 1);
+        $insert = $pdo->prepare(
+            "INSERT INTO foods_db (name, dimension_id, version, group_id, user_id, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g)
+             VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)"
+        );
+        $insert->execute([$name, $massDimensionId, $newVersion, $userId, $energyPer100, $proteinPer100, $carbPer100, $fatPer100]);
+        $foodId = (int) $pdo->lastInsertId();
+        insertFoodNutrients($pdo, $foodId, $microPer100, $nutrientIds, $gramUnitId);
+    }
+
+    $unitNameKey = strtolower(trim($unitLabel)) ?: 'unit';
+    $servingUnitId = getOrCreateCustomUnit($pdo, $foodId, $unitNameKey, $gramsPerUnit, "api_{$foodId}_{$unitNameKey}", $isNew);
+
+    return [$foodId, $isNew, $servingAmount, $servingUnitId];
+}
+
+function syncNutrition(string $accessToken, PDO $pdo, int $userId, int $ingestionSource, int $massDimensionId, int $gramUnitId,
+    array $mealTypeIds, array &$nutrientIds, array &$dataSourceIds, PDOStatement $insertDataSourceStmt, ?DateTimeImmutable $cutoff): void
+{
+    logLine("--- Nutrition (nutrition-log) ---");
+    $foodResourceCache = [];
+    $fallbackServingUnitCache = [];
+
+    streamDataPoints($accessToken, 'nutrition-log', 'nutritionLog', $cutoff, function (array $point) use (
+        $accessToken, $pdo, $userId, $ingestionSource, $massDimensionId, $gramUnitId, $mealTypeIds,
+        &$nutrientIds, &$dataSourceIds, $insertDataSourceStmt, &$foodResourceCache, &$fallbackServingUnitCache
+    ) {
+        bumpStat('nutrition', 'rows_seen', 1);
+        $nl = $point['nutritionLog'];
+        $name = trim((string) ($nl['foodDisplayName'] ?? ''));
+        if ($name === '') {
+            bumpStat('nutrition', 'skipped_error', 1);
+            return;
+        }
+        $mealTypeId = $mealTypeIds[$nl['mealType'] ?? ''] ?? null;
+        if ($mealTypeId === null) {
+            logLine("WARN nutrition api_uid=" . (apiUidFrom($point) ?? '?') . ": unmapped mealType '" . ($nl['mealType'] ?? '') . "'");
+            bumpStat('nutrition', 'skipped_error', 1);
+            return;
+        }
+
+        $energyKcal = isset($nl['energy']['kcal']) ? (float) $nl['energy']['kcal'] : null;
+        $carbG = isset($nl['totalCarbohydrate']['grams']) ? (float) $nl['totalCarbohydrate']['grams'] : null;
+        $fatG = isset($nl['totalFat']['grams']) ? (float) $nl['totalFat']['grams'] : null;
+        $proteinG = null;
+        $micronutrients = [];
+        foreach ($nl['nutrients'] ?? [] as $n) {
+            $nutrient = $n['nutrient'] ?? null;
+            $grams = $n['quantity']['grams'] ?? null;
+            if ($nutrient === null || $grams === null) {
+                continue;
+            }
+            if ($nutrient === 'PROTEIN') {
+                $proteinG = (float) $grams;
+            } elseif (in_array($nutrient, HC_STYLE_NUTRIENT_KEYS, true)) {
+                $micronutrients[$nutrient] = (float) $grams;
+            }
+        }
+
+        $servingAmount = isset($nl['serving']['amount']) ? (float) $nl['serving']['amount'] : 1.0;
+        $unitLabel = $nl['serving']['foodMeasurementUnitDisplayName'] ?? 'serving';
+        $foodRef = $nl['food'] ?? null;
+
+        $gramsForEntry = null;
+        $gramsPerUnit = null;
+        if ($foodRef !== null && $servingAmount > 0) {
+            $servings = fetchFoodServings($accessToken, $foodRef, $foodResourceCache);
+            if ($servings !== null) {
+                $gramsPerUnit = resolveGramsPerUnit($servings, $unitLabel);
+                if ($gramsPerUnit !== null) {
+                    $gramsForEntry = $servingAmount * $gramsPerUnit;
+                }
+            }
+        }
+
+        if ($gramsForEntry !== null && $gramsForEntry > 0) {
+            [$foodId, $wasNew, $finalServingAmount, $servingUnitId] = findOrCreateFoodReal(
+                $pdo, $userId, $massDimensionId, $name, $gramsForEntry, $servingAmount, $unitLabel, $gramsPerUnit,
+                $energyKcal, $proteinG, $carbG, $fatG, $micronutrients, $nutrientIds, $gramUnitId
+            );
+            bumpStat('nutrition', 'real_gram_match', 1);
+        } else {
+            [$foodId, $wasNew, $finalServingAmount, $servingUnitId] = findOrCreateFoodFallback(
+                $pdo, $userId, $massDimensionId, $name, $energyKcal, $proteinG, $carbG, $fatG,
+                $micronutrients, $nutrientIds, $gramUnitId, $fallbackServingUnitCache
+            );
+            bumpStat('nutrition', 'fallback_placeholder_match', 1);
+        }
+        bumpStat('nutrition', $wasNew ? 'foods_db_versions_created' : 'foods_db_versions_reused', 1);
+
+        $apiUid = apiUidFrom($point);
+        if ($apiUid === null) {
+            bumpStat('nutrition', 'skipped_error', 1);
+            return;
+        }
+        $dataSourceId = findOrCreateDataSource(dataSourceLabel($point), $pdo, $dataSourceIds, $insertDataSourceStmt);
+
+        $action = upsertByNaturalKey(
+            $pdo, 'food_log_entries', ['user_id', 'api_uid'], [$userId, $apiUid],
+            [
+                'start_time' => toMysqlDateTime($nl['interval']['startTime']),
+                'end_time' => toMysqlDateTime($nl['interval']['endTime']),
+                'meal_type_id' => $mealTypeId,
+                'food_id' => $foodId,
+                'serving_amount' => $finalServingAmount,
+                'serving_unit_id' => $servingUnitId,
+                'data_source_id' => $dataSourceId,
+                'ingestion_source_id' => $ingestionSource,
+            ],
+            provenanceNow($userId)
+        );
+        bumpStat('nutrition', $action, 1);
+    });
+
+    logLine("Nutrition done: " . json_encode($GLOBALS['runStats']['nutrition'] ?? []));
+}
+
+// ----------------------------------------------------------------------------
+// 2. Sleep -> sleep_sessions / sleep_stages
+// ----------------------------------------------------------------------------
+
+function syncSleep(string $accessToken, PDO $pdo, int $userId, int $ingestionSource, array $sleepTypeIds,
+    array $sleepStageTypeIds, array $recordingMethodIds, array &$dataSourceIds, PDOStatement $insertDataSourceStmt, ?DateTimeImmutable $cutoff): void
+{
+    logLine("--- Sleep (sleep) ---");
+    streamDataPoints($accessToken, 'sleep', 'sleep', $cutoff, function (array $point) use (
+        $pdo, $userId, $ingestionSource, $sleepTypeIds, $sleepStageTypeIds, $recordingMethodIds, &$dataSourceIds, $insertDataSourceStmt
+    ) {
+        bumpStat('sleep', 'rows_seen', 1);
+        $s = $point['sleep'];
+        $apiUid = apiUidFrom($point);
+        if ($apiUid === null || !isset($s['interval']['startTime'], $s['interval']['endTime'])) {
+            bumpStat('sleep', 'skipped_error', 1);
+            return;
+        }
+
+        $sleepTypeId = $sleepTypeIds[$s['type'] ?? ''] ?? null;
+        $recordingMethodId = $recordingMethodIds[$point['dataSource']['recordingMethod'] ?? ''] ?? null;
+        $dataSourceId = findOrCreateDataSource(dataSourceLabel($point), $pdo, $dataSourceIds, $insertDataSourceStmt);
+
+        $action = upsertByNaturalKey(
+            $pdo, 'sleep_sessions', ['user_id', 'api_uid'], [$userId, $apiUid],
+            [
+                'sleep_type_id' => $sleepTypeId,
+                'main_sleep' => isset($s['mainSleep']) ? ($s['mainSleep'] ? 1 : 0) : null,
+                'start_time' => toMysqlDateTime($s['interval']['startTime']),
+                'end_time' => toMysqlDateTime($s['interval']['endTime']),
+                'data_source_id' => $dataSourceId,
+                'recording_method_id' => $recordingMethodId,
+                'ingestion_source_id' => $ingestionSource,
+            ],
+            provenanceNow($userId)
+        );
+        bumpStat('sleep_sessions', $action, 1);
+
+        $findSession = $pdo->prepare("SELECT id FROM sleep_sessions WHERE user_id = ? AND api_uid = ?");
+        $findSession->execute([$userId, $apiUid]);
+        $sessionId = (int) $findSession->fetchColumn();
+        if ($sessionId === 0) {
+            return;
+        }
+
+        $existingStages = $pdo->prepare("SELECT start_time, end_time FROM sleep_stages WHERE sleep_session_id = ?");
+        $existingStages->execute([$sessionId]);
+        $seen = [];
+        foreach ($existingStages as $row) {
+            $seen[$row['start_time'] . '|' . $row['end_time']] = true;
+        }
+
+        $insertStage = $pdo->prepare(
+            "INSERT INTO sleep_stages (user_id, sleep_session_id, stage_type_id, start_time, end_time, ingestion_source_id)
+             VALUES (?, ?, ?, ?, ?, ?)"
+        );
+        foreach ($s['stages'] ?? [] as $stage) {
+            if (!isset($stage['startTime'], $stage['endTime'], $stage['type'])) {
+                continue;
+            }
+            $stageTypeId = $sleepStageTypeIds[$stage['type']] ?? null;
+            if ($stageTypeId === null) {
+                bumpStat('sleep_stages', 'skipped_unmapped', 1);
+                continue;
+            }
+            $startTime = toMysqlDateTime($stage['startTime']);
+            $endTime = toMysqlDateTime($stage['endTime']);
+            if (isset($seen[$startTime . '|' . $endTime])) {
+                bumpStat('sleep_stages', 'skipped_duplicate', 1);
+                continue;
+            }
+            $insertStage->execute([$userId, $sessionId, $stageTypeId, $startTime, $endTime, $ingestionSource]);
+            bumpStat('sleep_stages', 'inserted', 1);
+        }
+    });
+}
+
+// ----------------------------------------------------------------------------
+// 3. Exercise -> exercise_sessions
+// ----------------------------------------------------------------------------
+
+function parseSecondsSuffix(?string $value): ?int
+{
+    if ($value === null) {
+        return null;
+    }
+    return (int) round(((float) rtrim($value, 's')) * 1000);
+}
+
+function syncExercise(string $accessToken, PDO $pdo, int $userId, int $ingestionSource, int $meterUnitId,
+    array $recordingMethodIds, array &$dataSourceIds, PDOStatement $insertDataSourceStmt,
+    array &$activityTypeIds, PDOStatement $insertActivityTypeStmt, ?DateTimeImmutable $cutoff): void
+{
+    logLine("--- Exercise (exercise) ---");
+    streamDataPoints($accessToken, 'exercise', 'exercise', $cutoff, function (array $point) use (
+        $pdo, $userId, $ingestionSource, $meterUnitId, $recordingMethodIds, &$dataSourceIds, $insertDataSourceStmt,
+        &$activityTypeIds, $insertActivityTypeStmt
+    ) {
+        bumpStat('exercise', 'rows_seen', 1);
+        $e = $point['exercise'];
+        $apiUid = apiUidFrom($point);
+        if ($apiUid === null || !isset($e['interval']['startTime'])) {
+            bumpStat('exercise', 'skipped_error', 1);
+            return;
+        }
+
+        $startTime = toMysqlDateTime($e['interval']['startTime']);
+        $endTime = isset($e['interval']['endTime']) ? toMysqlDateTime($e['interval']['endTime']) : null;
+        $durationMs = $endTime !== null
+            ? (int) round((strtotime($endTime) - strtotime($startTime)) * 1000)
+            : null;
+
+        $activityTypeId = findOrCreateActivityType(
+            isset($e['exerciseType']) ? 'API_' . $e['exerciseType'] : null,
+            $pdo, $activityTypeIds, $insertActivityTypeStmt
+        );
+        $dataSourceId = findOrCreateDataSource(dataSourceLabel($point), $pdo, $dataSourceIds, $insertDataSourceStmt);
+        $recordingMethodId = $recordingMethodIds[$point['dataSource']['recordingMethod'] ?? ''] ?? null;
+
+        $summary = $e['metricsSummary'] ?? [];
+        $rawDetails = array_filter([
+            'heartRateZoneDurations' => $summary['heartRateZoneDurations'] ?? null,
+            'activeZoneMinutes' => $summary['activeZoneMinutes'] ?? null,
+            'mobilityMetrics' => $summary['mobilityMetrics'] ?? null,
+            'exerciseEvents' => $e['exerciseEvents'] ?? null,
+        ], fn($v) => $v !== null);
+
+        $action = upsertByNaturalKey(
+            $pdo, 'exercise_sessions', ['user_id', 'api_uid'], [$userId, $apiUid],
+            [
+                'start_time' => $startTime,
+                'end_time' => $endTime,
+                'activity_name' => $e['displayName'] ?? null,
+                'activity_type_id' => $activityTypeId,
+                'duration_ms' => $durationMs,
+                'active_duration_ms' => parseSecondsSuffix($e['activeDuration'] ?? null),
+                'calories' => isset($summary['caloriesKcal']) ? (int) round((float) $summary['caloriesKcal']) : null,
+                'distance' => isset($summary['distanceMillimeters']) ? ((float) $summary['distanceMillimeters'] / 1000) : null,
+                'distance_unit_id' => isset($summary['distanceMillimeters']) ? $meterUnitId : null,
+                'steps' => isset($summary['steps']) ? (int) $summary['steps'] : null,
+                'average_heart_rate' => isset($summary['averageHeartRateBeatsPerMinute']) ? (int) $summary['averageHeartRateBeatsPerMinute'] : null,
+                'has_gps' => !empty($e['exerciseMetadata']['hasGps']) ? 1 : 0,
+                'data_source_id' => $dataSourceId,
+                'recording_method_id' => $recordingMethodId,
+                'ingestion_source_id' => $ingestionSource,
+                'raw_details' => empty($rawDetails) ? null : json_encode($rawDetails),
+            ],
+            provenanceNow($userId)
+        );
+        bumpStat('exercise', $action, 1);
+    });
+}
+
+// ----------------------------------------------------------------------------
+// 4 & 5. Weight & height -> measurements
+// ----------------------------------------------------------------------------
+
+function syncMeasurement(string $accessToken, PDO $pdo, string $dataType, string $bodyKey, string $valueField,
+    int $userId, int $ingestionSource, int $measurementTypeId, int $unitId, array $recordingMethodIds,
+    array &$dataSourceIds, PDOStatement $insertDataSourceStmt, ?DateTimeImmutable $cutoff): void
+{
+    logLine("--- {$dataType} ({$dataType}) ---");
+    streamDataPoints($accessToken, $dataType, $bodyKey, $cutoff, function (array $point) use (
+        $pdo, $bodyKey, $valueField, $userId, $ingestionSource, $measurementTypeId, $unitId,
+        $recordingMethodIds, &$dataSourceIds, $insertDataSourceStmt, $dataType
+    ) {
+        bumpStat($dataType, 'rows_seen', 1);
+        $body = $point[$bodyKey];
+        $apiUid = apiUidFrom($point);
+        if ($apiUid === null || !isset($body['sampleTime']['physicalTime'], $body[$valueField])) {
+            bumpStat($dataType, 'skipped_error', 1);
+            return;
+        }
+
+        $dataSourceId = findOrCreateDataSource(dataSourceLabel($point), $pdo, $dataSourceIds, $insertDataSourceStmt);
+        $recordingMethodId = $recordingMethodIds[$point['dataSource']['recordingMethod'] ?? ''] ?? null;
+
+        $action = upsertByNaturalKey(
+            $pdo, 'measurements', ['user_id', 'measurement_type_id', 'api_uid'], [$userId, $measurementTypeId, $apiUid],
+            [
+                'reading_time' => toMysqlDateTime($body['sampleTime']['physicalTime']),
+                'value' => (float) $body[$valueField],
+                'unit_id' => $unitId,
+                'data_source_id' => $dataSourceId,
+                'recording_method_id' => $recordingMethodId,
+                'ingestion_source_id' => $ingestionSource,
+            ],
+            provenanceNow($userId)
+        );
+        bumpStat($dataType, $action, 1);
+    });
+}
+
+// ----------------------------------------------------------------------------
+// 6. Daily resting heart rate -> daily_resting_heart_rate
+// ----------------------------------------------------------------------------
+
+function syncDailyRestingHeartRate(string $accessToken, PDO $pdo, int $userId, int $ingestionSource,
+    array $recordingMethodIds, array $calcMethodIds, array &$dataSourceIds, PDOStatement $insertDataSourceStmt, ?DateTimeImmutable $cutoff): void
+{
+    logLine("--- Daily resting heart rate (daily-resting-heart-rate) ---");
+    streamDataPoints($accessToken, 'daily-resting-heart-rate', 'dailyRestingHeartRate', $cutoff, function (array $point) use (
+        $pdo, $userId, $ingestionSource, $recordingMethodIds, $calcMethodIds, &$dataSourceIds, $insertDataSourceStmt
+    ) {
+        bumpStat('daily_resting_heart_rate', 'rows_seen', 1);
+        $d = $point['dailyRestingHeartRate'];
+        if (!isset($d['date'], $d['beatsPerMinute'])) {
+            bumpStat('daily_resting_heart_rate', 'skipped_error', 1);
+            return;
+        }
+
+        $dataSourceId = findOrCreateDataSource(dataSourceLabel($point), $pdo, $dataSourceIds, $insertDataSourceStmt);
+        $recordingMethodId = $recordingMethodIds[$point['dataSource']['recordingMethod'] ?? ''] ?? null;
+        $calcMethodId = $calcMethodIds[$d['dailyRestingHeartRateMetadata']['calculationMethod'] ?? ''] ?? null;
+
+        $action = upsertByNaturalKey(
+            $pdo, 'daily_resting_heart_rate', ['user_id', 'reading_date'], [$userId, civilDate($d['date'])],
+            [
+                'bpm' => (int) $d['beatsPerMinute'],
+                'calculation_method_id' => $calcMethodId,
+                'data_source_id' => $dataSourceId,
+                'recording_method_id' => $recordingMethodId,
+                'ingestion_source_id' => $ingestionSource,
+            ],
+            provenanceNow($userId)
+        );
+        bumpStat('daily_resting_heart_rate', $action, 1);
+    });
+}
+
+// ----------------------------------------------------------------------------
+// 7, 8, 9. Steps, heart rate, HRV -> insert-missing (no native ID available)
+// ----------------------------------------------------------------------------
+
+function existingTimestamps(PDO $pdo, string $table, int $userId, ?DateTimeImmutable $cutoff): array
+{
+    if ($cutoff === null) {
+        // Full mode: scanning the entire table's timestamps into memory isn't
+        // safe at HC-import scale (millions of rows) — full mode for these
+        // three types relies on the caller re-running incrementally instead.
+        return [];
+    }
+    $stmt = $pdo->prepare("SELECT reading_time FROM {$table} WHERE user_id = ? AND reading_time >= ?");
+    $stmt->execute([$userId, $cutoff->format('Y-m-d H:i:s')]);
+    $set = [];
+    foreach ($stmt as $row) {
+        $set[$row['reading_time']] = true;
+    }
+    return $set;
+}
+
+function syncInsertMissingSeries(string $accessToken, PDO $pdo, string $dataType, string $bodyKey, string $table,
+    string $valueField, string $valueColumn, int $userId, int $ingestionSource, array $recordingMethodIds,
+    array &$dataSourceIds, PDOStatement $insertDataSourceStmt, ?DateTimeImmutable $cutoff): void
+{
+    logLine("--- {$dataType} ({$dataType}) ---");
+    $seen = existingTimestamps($pdo, $table, $userId, $cutoff);
+    logLine(count($seen) . " existing {$table} timestamps loaded for dedup" . ($cutoff === null ? " (full mode: dedup skipped, expect re-run incrementally instead)" : ""));
+
+    $insert = $pdo->prepare(
+        "INSERT INTO {$table} (user_id, reading_time, {$valueColumn}, data_source_id, recording_method_id, ingestion_source_id)
+         VALUES (?, ?, ?, ?, ?, ?)"
+    );
+
+    streamDataPoints($accessToken, $dataType, $bodyKey, $cutoff, function (array $point) use (
+        $pdo, $bodyKey, $valueField, &$seen, $insert, $userId, $ingestionSource, $recordingMethodIds,
+        &$dataSourceIds, $insertDataSourceStmt, $dataType
+    ) {
+        bumpStat($dataType, 'rows_seen', 1);
+        $body = $point[$bodyKey];
+        $timeIso = $body['interval']['startTime'] ?? $body['sampleTime']['physicalTime'] ?? null;
+        if ($timeIso === null || !isset($body[$valueField])) {
+            bumpStat($dataType, 'skipped_error', 1);
+            return;
+        }
+        $readingTime = toMysqlDateTime($timeIso);
+        if (isset($seen[$readingTime])) {
+            bumpStat($dataType, 'skipped_duplicate', 1);
+            return;
+        }
+        $seen[$readingTime] = true;
+
+        $dataSourceId = findOrCreateDataSource(dataSourceLabel($point), $pdo, $dataSourceIds, $insertDataSourceStmt);
+        $recordingMethodId = $recordingMethodIds[$point['dataSource']['recordingMethod'] ?? ''] ?? null;
+
+        $rawValue = $body[$valueField];
+        $value = ($dataType === 'heart-rate-variability') ? (float) $rawValue : (int) round((float) $rawValue);
+
+        $insert->execute([$userId, $readingTime, $value, $dataSourceId, $recordingMethodId, $ingestionSource]);
+        bumpStat($dataType, 'inserted', 1);
+    });
+}
+
+// ----------------------------------------------------------------------------
+// Run
+// ----------------------------------------------------------------------------
+
+syncNutrition($accessToken, $pdo, $userId, $ingestionSourceApi, $massDimensionId, $gramUnitId, $mealTypeIds, $nutrientIds, $dataSourceIds, $insertDataSource, $cutoff);
+syncSleep($accessToken, $pdo, $userId, $ingestionSourceApi, $sleepTypeIds, $sleepStageTypeIds, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
+syncExercise($accessToken, $pdo, $userId, $ingestionSourceApi, $meterUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $activityTypeIds, $insertActivityType, $cutoff);
+syncMeasurement($accessToken, $pdo, 'weight', 'weight', 'weightGrams', $userId, $ingestionSourceApi, $measurementTypeIds['weight'], $gramUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
+syncMeasurement($accessToken, $pdo, 'height', 'height', 'heightMillimeters', $userId, $ingestionSourceApi, $measurementTypeIds['height'], $mmUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
+syncDailyRestingHeartRate($accessToken, $pdo, $userId, $ingestionSourceApi, $recordingMethodIds, $calcMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
+syncInsertMissingSeries($accessToken, $pdo, 'steps', 'steps', 'steps_readings', 'count', 'steps', $userId, $ingestionSourceApi, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
+syncInsertMissingSeries($accessToken, $pdo, 'heart-rate', 'heartRate', 'heart_rate_readings', 'beatsPerMinute', 'bpm', $userId, $ingestionSourceApi, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
+syncInsertMissingSeries($accessToken, $pdo, 'heart-rate-variability', 'heartRateVariability', 'heart_rate_variability_readings', 'rootMeanSquareOfSuccessiveDifferencesMilliseconds', 'rmssd_ms', $userId, $ingestionSourceApi, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
+
+$elapsed = round(microtime(true) - $startedAt, 1);
+logLine("=== Sync complete in {$elapsed}s ===");
+foreach ($runStats as $category => $stats) {
+    logLine(strtoupper($category) . ': ' . json_encode($stats));
+}

@@ -67,7 +67,8 @@ INSERT INTO unit_conversions (id, name, dimension_id, factor_to_base) VALUES
     (11, 'cup', 2, 236.588),
     (12, 'fluid_ounce', 2, 29.5735),
     (13, 'millimeter', 3, 1),
-    (14, 'mile', 3, 1609344);
+    (14, 'mile', 3, 1609344),
+    (15, 'meter', 3, 1000);
 
 -- ----------------------------------------------------------------------------
 -- Our own fixed vocabularies (not externally driven)
