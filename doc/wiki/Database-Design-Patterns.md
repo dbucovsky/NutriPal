@@ -101,6 +101,8 @@ When the same table can be populated from more than one independent source (e.g.
 
 **Multiple independent sources reporting the same real-world event doesn't mean every source is telling the whole story.** Two devices tracking the same activity (a wearable and a phone both counting steps) can each pass fingerprint dedup internally while still double-counting when naively summed together — the fingerprint prevents *duplicate ingestion*, not *overlapping measurement*. When a metric can plausibly be measured by more than one concurrent device/source, decide explicitly (even if the decision is deferred to application logic) which source is authoritative for aggregation, rather than assuming dedup alone makes summing safe.
 
+**Real-world postscript (NutriPal)**: this project actually dropped fingerprint dedup entirely partway through, once its own circumstances stopped justifying the complexity. Two things changed: (1) one of its two original sources (a bulk historical export format) was retired outright, and every source left standing turned out to provide its own genuine native ID — once every active source has one, `api_uid`-first matching with no fallback is simpler and sidesteps the fingerprint's core weakness (a hash built from mutable fields breaks the moment one of those fields is legitimately edited). (2) For a handful of very high-volume, passively-sampled categories (continuous sensor readings), *neither* remaining source ever provided a native ID at all — but since that kind of data is realistically never edited after the fact (unlike a user-editable log entry), a plain existence check against a natural key (e.g. timestamp) turned out to be sufficient on its own; a full content hash bought nothing extra there. **Lesson: fingerprint dedup earns its keep specifically when reconciling sources that (a) genuinely can't be told apart any other way and (b) produce records that get legitimately edited after the fact — verify both conditions still hold for your actual sources before reaching for it, rather than defaulting to it for every multi-source table.**
+
 ## Generic characteristic/value/unit tables for extensible metrics
 
 When a family of related, same-shaped point-in-time facts is likely to grow over time (new body measurements, new nutrients, new sensor types), model it as one table with `characteristic_id` (a lookup), `value`, and `unit_id`, rather than one table per fact. Adding a new characteristic becomes a new lookup row, not a schema migration. Concretely: `quantity`/`nutrient_id`/`unit_id` on a nutrient-tracking table, or `value`/`measurement_type_id`/`unit_id` on a body-measurement table, both follow this shape.
@@ -111,9 +113,13 @@ Tradeoffs worth being explicit about:
 - **Scope the generalization to genuinely similar facts.** Don't fold in data with a fundamentally different shape (a continuous high-frequency sensor stream, a multi-stage session) just because it's superficially "a number with a unit" — those need their own specialized tables (their dedup, volume, and query patterns differ too much to share one generic table cleanly).
 - A `unit_id` column is only worth adding if the surrounding units table (see "single source of truth for units," implied throughout this doc) already generalizes across the needed dimensions (mass, volume, length, etc.) — extending that table's lookup dimension is easier than inventing a second, parallel unit concept just for the new characteristic family.
 
-## Non-destructive value correction (`SRC` / `FIX` / `MOD`)
+## Non-destructive value correction: two patterns
 
-When a sourced value sometimes needs correcting or supplementing — without ever destroying what the source actually reported, and without needing a vague "estimated" boolean bolted onto a single column — model up to three rows per (record, field) pair, tagged by kind:
+When a sourced value sometimes needs correcting or supplementing without ever destroying what was originally reported, two different techniques fit two different situations. Which one applies depends on a single question: **does the correction still describe the same real-world thing, or does it actually describe a different one now?**
+
+### Layered correction (`SRC` / `FIX` / `MOD`) — for the same record, adjusted
+
+Model up to three rows per (record, field) pair, tagged by kind:
 - **`SRC`** — the raw value as imported, always preserved untouched, forever.
 - **`FIX`** — a hard override. If present, it wins outright; `SRC`/`MOD` are ignored entirely for that field.
 - **`MOD`** — an additive adjustment layered on top of `SRC` (positive or negative), used only when no `FIX` exists.
@@ -126,6 +132,20 @@ ELSE:                 effective = GREATEST(0, COALESCE(SRC, 0) + COALESCE(MOD, 0
 (The zero-floor guards against a case where a negative `MOD` would otherwise push the effective value below a physically meaningless negative number — omit the `GREATEST` clamp if negative values are actually valid for whatever you're modeling.)
 
 This cleanly covers three real cases with one mechanism: a field the source never reported at all (no `SRC` row — just a `MOD` supplying the whole value, since `COALESCE(SRC,0)` treats the absence as zero), a field whose reported value needs a proportional nudge (`SRC` + a small `MOD`), and a field that needs to be completely replaced with a known-correct value (`FIX`).
+
+### Versioning — for when the thing itself is now different
+
+Sometimes a "correction" isn't fixing a mistaken reading at all — it's recognizing that what's being described has genuinely changed (a manufacturer reformulated a product, a recipe actually changed) and a query needs to resolve "which variant applies right now," not "what's this record's corrected value." Don't layer a correction onto the existing row for this — fork a new row instead, and never modify the original:
+- Add a plain, nullable `version` column to the table — no self-referencing parent link needed. "All versions of a thing" is just every row sharing the same natural identity (e.g. a `name` plus whatever else identifies it).
+- `NULL` and `0` are treated as equivalent, meaning "the original": the first row is inserted with `version = NULL`; a second version gets `version = 1`, computed as `COALESCE(MAX(version), 0) + 1` across every existing row sharing the same identity; a third gets `2`, and so on.
+- Display rule: show no version label anywhere in the UI until a second version actually exists — a lone row has no meaningful "v0" to show anyone.
+- **The hard part is deciding when a difference deserves a new version versus reusing the existing one.** Draw the line at whether the difference could plausibly be measurement/reporting noise (reuse the existing version) versus whether the thing itself is genuinely different now (fork a new version) — a tolerance check (e.g. "within 5% is noise") is a reasonable default, but the real threshold depends on the domain.
+
+### Which to pick
+
+Layered correction fits a specific *record* whose reported value needs adjusting while remaining unambiguously the same record (a sensor reading that was miscalibrated, a manually-supplied value for a field the source never reports at all). Versioning fits a *catalog/reference entity* that can legitimately have multiple real, simultaneously-valid variants over time.
+
+**Real-world postscript (NutriPal)**: this project originally built `SRC`/`FIX`/`MOD` for its food-nutrition data, then replaced it with versioning once real design work showed nutrition "corrections" were almost always "this is actually a different formulation or recipe," not "the same food's number was slightly wrong" — the sourced value essentially never needed adjusting in place, so the extra correction-tracking machinery wasn't earning its cost. Don't assume layered correction is the default for every sourced value; check which question you're actually answering first.
 
 ## Resolving a "could be one of several other tables" reference
 

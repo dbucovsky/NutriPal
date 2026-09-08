@@ -426,7 +426,15 @@ function fetchFoodServings(string $accessToken, string $foodRef, array &$cache):
         }
     }
 
-    $result = ($gramMultiplier === null || $gramMultiplier <= 0) ? null : ['gramMultiplier' => $gramMultiplier, 'byUnit' => $byUnit];
+    // brand is only present on some foods (packaged/branded items) — confirmed
+    // via real data that it's a real field, just conditionally populated, not
+    // absent from the API entirely. Kept separate from gramMultiplier/byUnit
+    // below (nullable) so a food with no gram entry still yields its brand.
+    $result = [
+        'brand' => $decoded['food']['brand'] ?? null,
+        'gramMultiplier' => ($gramMultiplier !== null && $gramMultiplier > 0) ? $gramMultiplier : null,
+        'byUnit' => $byUnit,
+    ];
     $cache[$foodRef] = $result;
     return $result;
 }
@@ -434,6 +442,9 @@ function fetchFoodServings(string $accessToken, string $foodRef, array &$cache):
 /** Real grams for one unit of $unitLabel, using the food's own "gram" entry as a pivot. Null if the unit isn't listed. */
 function resolveGramsPerUnit(array $foodServings, string $unitLabel): ?float
 {
+    if ($foodServings['gramMultiplier'] === null) {
+        return null;
+    }
     $mult = $foodServings['byUnit'][strtolower($unitLabel)] ?? null;
     if ($mult === null) {
         return null;
@@ -442,16 +453,16 @@ function resolveGramsPerUnit(array $foodServings, string $unitLabel): ?float
 }
 
 /** Same ratio-based fallback import-health-connect.php's findOrCreateFood() uses, for when real grams can't be resolved. */
-function findOrCreateFoodFallback(PDO $pdo, int $userId, int $massDimensionId, string $name,
+function findOrCreateFoodFallback(PDO $pdo, int $userId, int $massDimensionId, string $name, ?string $brandName,
     ?float $energyKcal, ?float $proteinG, ?float $carbG, ?float $fatG,
     array $micronutrients, array &$nutrientIds, int $gramUnitId, array &$servingUnitCache): array
 {
     $existing = $pdo->prepare(
         "SELECT id, version, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g
-         FROM foods_db WHERE name = ? AND brand_name IS NULL AND dimension_id = ? AND user_id = ?
+         FROM foods_db WHERE name = ? AND brand_name <=> ? AND dimension_id = ? AND user_id = ?
          ORDER BY COALESCE(version, 0) DESC"
     );
-    $existing->execute([$name, $massDimensionId, $userId]);
+    $existing->execute([$name, $brandName, $massDimensionId, $userId]);
     $candidates = $existing->fetchAll(PDO::FETCH_ASSOC);
 
     $impliedRatio = function (?float $incoming, ?float $baseline): ?float {
@@ -504,10 +515,10 @@ function findOrCreateFoodFallback(PDO $pdo, int $userId, int $massDimensionId, s
     $latestVersion = empty($candidates) ? null : ((int) $candidates[0]['version']);
     $newVersion = $latestVersion === null ? null : ($latestVersion + 1);
     $insert = $pdo->prepare(
-        "INSERT INTO foods_db (name, dimension_id, version, group_id, user_id, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g)
-         VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)"
+        "INSERT INTO foods_db (name, brand_name, dimension_id, version, group_id, user_id, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g)
+         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)"
     );
-    $insert->execute([$name, $massDimensionId, $newVersion, $userId, $energyKcal, $proteinG, $carbG, $fatG]);
+    $insert->execute([$name, $brandName, $massDimensionId, $newVersion, $userId, $energyKcal, $proteinG, $carbG, $fatG]);
     $foodId = (int) $pdo->lastInsertId();
     insertFoodNutrients($pdo, $foodId, $micronutrients, $nutrientIds, $gramUnitId);
 
@@ -563,7 +574,7 @@ function getOrCreateCustomUnit(PDO $pdo, int $foodId, string $unitName, float $e
  * findOrCreateFoodFallback() when the food resource has no usable gram
  * conversion. Returns [foodId, wasNewVersion, servingAmount, servingUnitId].
  */
-function findOrCreateFoodReal(PDO $pdo, int $userId, int $massDimensionId, string $name,
+function findOrCreateFoodReal(PDO $pdo, int $userId, int $massDimensionId, string $name, ?string $brandName,
     float $gramsForEntry, float $servingAmount, string $unitLabel, float $gramsPerUnit,
     ?float $energyKcal, ?float $proteinG, ?float $carbG, ?float $fatG,
     array $micronutrients, array &$nutrientIds, int $gramUnitId): array
@@ -580,10 +591,10 @@ function findOrCreateFoodReal(PDO $pdo, int $userId, int $massDimensionId, strin
 
     $existing = $pdo->prepare(
         "SELECT id, version, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g
-         FROM foods_db WHERE name = ? AND brand_name IS NULL AND dimension_id = ? AND user_id = ?
+         FROM foods_db WHERE name = ? AND brand_name <=> ? AND dimension_id = ? AND user_id = ?
          ORDER BY COALESCE(version, 0) DESC"
     );
-    $existing->execute([$name, $massDimensionId, $userId]);
+    $existing->execute([$name, $brandName, $massDimensionId, $userId]);
     $candidates = $existing->fetchAll(PDO::FETCH_ASSOC);
 
     $closeEnough = function (?float $a, ?float $b): bool {
@@ -614,10 +625,10 @@ function findOrCreateFoodReal(PDO $pdo, int $userId, int $massDimensionId, strin
         $latestVersion = empty($candidates) ? null : ((int) $candidates[0]['version']);
         $newVersion = $latestVersion === null ? null : ($latestVersion + 1);
         $insert = $pdo->prepare(
-            "INSERT INTO foods_db (name, dimension_id, version, group_id, user_id, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g)
-             VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)"
+            "INSERT INTO foods_db (name, brand_name, dimension_id, version, group_id, user_id, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g)
+             VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)"
         );
-        $insert->execute([$name, $massDimensionId, $newVersion, $userId, $energyPer100, $proteinPer100, $carbPer100, $fatPer100]);
+        $insert->execute([$name, $brandName, $massDimensionId, $newVersion, $userId, $energyPer100, $proteinPer100, $carbPer100, $fatPer100]);
         $foodId = (int) $pdo->lastInsertId();
         insertFoodNutrients($pdo, $foodId, $microPer100, $nutrientIds, $gramUnitId);
     }
@@ -675,27 +686,35 @@ function syncNutrition(string $accessToken, PDO $pdo, int $userId, int $ingestio
         $unitLabel = $nl['serving']['foodMeasurementUnitDisplayName'] ?? 'serving';
         $foodRef = $nl['food'] ?? null;
 
+        // Fetched whenever a food reference exists, regardless of whether
+        // gram conversion is possible — brand (present on some, not all,
+        // foods — confirmed via real branded items like "Lay's"/"Food Lion")
+        // must not be dropped just because a food has no gram serving entry.
+        $brandName = null;
         $gramsForEntry = null;
         $gramsPerUnit = null;
-        if ($foodRef !== null && $servingAmount > 0) {
+        if ($foodRef !== null) {
             $servings = fetchFoodServings($accessToken, $foodRef, $foodResourceCache);
             if ($servings !== null) {
-                $gramsPerUnit = resolveGramsPerUnit($servings, $unitLabel);
-                if ($gramsPerUnit !== null) {
-                    $gramsForEntry = $servingAmount * $gramsPerUnit;
+                $brandName = $servings['brand'];
+                if ($servingAmount > 0) {
+                    $gramsPerUnit = resolveGramsPerUnit($servings, $unitLabel);
+                    if ($gramsPerUnit !== null) {
+                        $gramsForEntry = $servingAmount * $gramsPerUnit;
+                    }
                 }
             }
         }
 
         if ($gramsForEntry !== null && $gramsForEntry > 0) {
             [$foodId, $wasNew, $finalServingAmount, $servingUnitId] = findOrCreateFoodReal(
-                $pdo, $userId, $massDimensionId, $name, $gramsForEntry, $servingAmount, $unitLabel, $gramsPerUnit,
+                $pdo, $userId, $massDimensionId, $name, $brandName, $gramsForEntry, $servingAmount, $unitLabel, $gramsPerUnit,
                 $energyKcal, $proteinG, $carbG, $fatG, $micronutrients, $nutrientIds, $gramUnitId
             );
             bumpStat('nutrition', 'real_gram_match', 1);
         } else {
             [$foodId, $wasNew, $finalServingAmount, $servingUnitId] = findOrCreateFoodFallback(
-                $pdo, $userId, $massDimensionId, $name, $energyKcal, $proteinG, $carbG, $fatG,
+                $pdo, $userId, $massDimensionId, $name, $brandName, $energyKcal, $proteinG, $carbG, $fatG,
                 $micronutrients, $nutrientIds, $gramUnitId, $fallbackServingUnitCache
             );
             bumpStat('nutrition', 'fallback_placeholder_match', 1);

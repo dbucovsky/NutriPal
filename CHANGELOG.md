@@ -1,5 +1,29 @@
 # Changelog
 
+## V0.0.21 — 2026-09-08 16:45
+### Changes
+- Fixed `README.md`, which had the same "no application code exists yet" staleness as `doc/wiki/Home.md` did (already fixed in V0.0.18).
+
+## V0.0.20 — 2026-09-08 16:30
+### Changes
+- **Fixed a real bug: `foods_db.brand_name` was NULL for every food**, spotted by the user noticing it looked wrong. My first check was incomplete — I confirmed Health Connect genuinely has no brand column, then checked exactly one live-API `food` resource, found no `brand` field, and wrongly concluded the API doesn't expose it at all. Checking several more (branded/packaged items specifically) showed a real `brand` field does exist — it's just conditionally present, only for actual packaged/branded foods, not generic ones — confirmed against real values ("Lay's", "Food Lion", "BelGioioso", "Quest", "Mission", "Great Value", etc.). `scripts/sync-google-health.php` was already fetching the `food` resource for gram conversion but never reading this field.
+- Fixed `fetchFoodServings()` to always surface `brand` when the food resource fetch succeeds, decoupled from whether a usable gram-conversion entry exists (previously the whole result collapsed to `null` if there was no `"gram"` serving entry, silently discarding brand info too). `findOrCreateFoodReal()`/`findOrCreateFoodFallback()` now match and store `brand_name` (via MySQL's `<=>` null-safe equality, since two foods sharing a name but differing only in brand — or one branded, one generic — are genuinely different catalog entries).
+- Re-ran the sync against the real account: 50 of 689 catalog foods now have a real brand; re-ran a second time immediately to confirm full idempotency (0 created/updated, only reused/skipped).
+- **Known limitation, not fixed**: `foods_db` rows created before this fix keep their incorrect `brand_name = NULL` — they aren't retroactively corrected (deletion isn't possible in this schema by design; a new, correctly-branded version was created instead going forward, matching how versioning already handles a genuine data difference). Old food_log_entries referencing the pre-fix rows still point at the less-complete version.
+
+## V0.0.19 — 2026-09-08 16:00
+### Changes
+- Fixed `doc/wiki/Database-Design-Patterns.md`, which still documented fingerprint-based dedup and the `SRC`/`FIX`/`MOD` correction pattern as NutriPal's current approach — both were fully replaced this session (`api_uid`-only identity, versioning). Kept both original techniques as legitimate, still-generically-useful patterns (this doc is meant to be reusable across other projects), but added a "real-world postscript" to each explaining what NutriPal actually settled on instead and why, plus a new "Versioning" pattern section (previously undocumented here) with guidance on when to pick layered correction vs. versioning.
+
+## V0.0.18 — 2026-09-08 15:30
+### Changes
+- Fixed `doc/wiki/Home.md`, which still said "development is being restarted from scratch" and "no app code exists yet" — badly stale given the finished schema, both importers, and the live sync. Rewrote the Status section to reflect reality and flag the actual next milestone (there's still no application/UI at all — that's the real gap now, not the database layer).
+
+## V0.0.17 — 2026-09-08 15:00
+### Changes
+- Rewrote `sql/sample_data.sql`, which still reflected the pre-redesign schema (`food_log_nutrients`, `SRC`/`FIX`/`MOD`, `food_name`/`brand_name`/`energy_kcal` directly on `food_log_entries`). Now uses the current strict `food_id` + `serving_amount` reference model: 10 catalog `foods_db` entries plus one genuine version fork (a real recipe change to "Oatmeal with Banana," not just a different quantity), each with a named real-world custom unit (`foods_db_custom_units`) and a representative `foods_db_nutrients` subset — including a hand-entered `LEUCINE` value, demonstrating what a manually-tracked micronutrient looks like now that versioning replaced the `SRC`/`FIX`/`MOD` system. No longer re-seeds lookups already covered by `sql/init_lookups.sql` (would collide on duplicate keys) — only adds the two `lut_data_source` rows that file deliberately leaves empty.
+- Verified by actually loading `sql/schema.sql` + `sql/init_lookups.sql` + `sql/sample_data.sql` in sequence into a throwaway database (`nutripal_sampletest`/`nutripal_sampletest_hist`) and querying the joined result before dropping it — not just reviewed for syntax.
+
 ## V0.0.16 — 2026-09-08 14:00
 ### Changes
 - Built `scripts/sync-google-health.php`, the live Google Health API sync — the last major "not yet implemented" item. Covers all 9 categories (nutrition, steps, heart rate, HRV, daily resting heart rate, sleep, weight, height, exercise); `daily_resting_heart_rate` gets real data for the first time. Two modes: default incremental (last 7 days, matching `doc/wiki/Data-Sync.md`'s original design) or `--full`/`--days=N`.
