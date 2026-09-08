@@ -1,5 +1,18 @@
 # Changelog
 
+## V0.1.0 — 2026-09-08 17:30
+### Changes
+- **Started the frontend** — the first real application screen exists. New `frontend/` (Vite + React, plain JavaScript): a day's food log with meal grouping (Breakfast/Lunch/Dinner/Snack/Anytime), real-world serving labels, and derived macros per entry plus a daily total. Date navigation (prev/next day) included.
+- New minimal JSON API, one file per endpoint under `public/api/` (matching the existing one-file-per-concern style, no router/framework introduced): `food-log.php` (the screen's data) and `login.php` (see below). Verified directly against the real database, including the day-boundary edge case: an entry at UTC `2026-09-06 03:55` (local `2026-09-05 23:55`, `APP_TIMEZONE=America/New_York`) correctly lands only on `2026-09-05`, not `2026-09-06` — the naive-UTC-bucketing mistake already found and avoided earlier this session (see `doc/wiki/Data-Sync.md`).
+- Added a **placeholder login** (explicitly no password, session, or security of any kind) — `public/api/login.php` looks up a real user by email, `frontend/src/components/Login.jsx` + `App.jsx` hold the result in React state persisted to `localStorage`. Exists purely to get the frontend/backend round-trip pattern established (including a POST, not just GETs) before more screens get built on a hardcoded user.
+- Added the missing `APP_TIMEZONE` to the real local `.env` (present in `.env.example` since V0.0.10 but never actually set) — without it, local-day bucketing was silently falling back to UTC.
+- Verified end-to-end in a real browser (not just curl): log in with the real seeded email, browse several real days of food (including ones with duplicate Health-Connect/API-sourced entries for the same food — the already-disclosed cross-source duplication limitation is now visibly obvious in the UI, e.g. a day's total showing roughly double a realistic value), refresh to confirm login persists, log out and back in.
+- `doc/wiki/Architecture.md` gets a new "Frontend (dev setup)" section (how to run it, the `/api` proxy) and a correction: the PHP backend runs locally via `php -S`, not Apache — XAMPP is only used for MySQL locally.
+
+### Known, disclosed limitations
+- The cross-source duplication issue (documented since V0.0.16) is now directly visible to a user looking at a real day's food log, not just a database-level concern — worth prioritizing the actual reconciliation fix sooner now that it has a visible symptom.
+- Login has zero real security — anyone can "log in" as any real user by typing their email, and every API endpoint trusts whatever `user_id` it's given with no authorization check. Fine for single-developer local use only.
+
 ## V0.0.21 — 2026-09-08 16:45
 ### Changes
 - Fixed `README.md`, which had the same "no application code exists yet" staleness as `doc/wiki/Home.md` did (already fixed in V0.0.18).

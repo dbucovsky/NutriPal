@@ -1,0 +1,117 @@
+.login-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 280px;
+}
+
+.login-form h1 {
+  margin: 0;
+}
+
+.login-note {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-bottom: 8px;
+}
+
+.login-form input,
+.login-form button {
+  font-size: 1rem;
+  padding: 8px 10px;
+}
+
+.login-error {
+  color: var(--danger);
+}
+
+.app {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.date-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.date-nav h2 {
+  margin: 0;
+}
+
+.date-nav button {
+  font-size: 1.1rem;
+  padding: 4px 12px;
+}
+
+.meal-section {
+  margin-bottom: 20px;
+}
+
+.meal-section h3 {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+  margin-bottom: 8px;
+}
+
+.meal-section ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.food-entry {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+.food-entry-name {
+  flex: 1 1 55%;
+  font-weight: 500;
+}
+
+.food-entry-name .brand {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.food-entry-serving {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.food-entry-macros {
+  flex-basis: 100%;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.daily-totals {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 2px solid var(--border);
+}
