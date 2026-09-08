@@ -1,5 +1,12 @@
 # Changelog
 
+## V0.1.4 — 2026-09-08 23:30
+### Changes
+- **`scripts/sync-google-health.php` now logs every live API request/response** it makes to `storage/api-logs/<run_id>/<endpoint>.jsonl` (on by default; `--no-log` opts out), plus a `manifest.json` recording that run's `--full`/`--days` window. All two HTTP call sites (`streamDataPoints()`'s pagination, `fetchFoodServings()`'s food-resource lookups) now go through one shared `apiCall()` function, which is also the only place the `Authorization` header ever touches memory — it's deliberately never written to the log (verified by grepping a real run's logged output for any token material: none found).
+- **New `--replay=<run_id>` mode**: re-runs the exact same parsing/ingestion code against a previously-recorded run's logs instead of the network, via a new `ReplayReader` that hands back recorded responses in original order (falling back to a synthetic empty page once exhausted, which `streamDataPoints()`'s existing "no more points" check already treats as end-of-pagination — no special-casing needed). No OAuth token refresh happens in replay mode; the original run's `--full`/`--days` window auto-restores from its manifest. Verified against a real run: replay completed in 0.3s vs. the original 13.2s live run, with every category correctly reporting "already exists" and zero new rows written.
+- **New `--debug` flag**: traces per-record processing decisions to the human-readable log via a new `debugLog()` helper — food match type/brand/version for nutrition, session/action for sleep/exercise/measurements/daily-resting-heart-rate, and per-*page* (not per-row) counts for the three high-volume insert-missing categories (steps/heart-rate/HRV), since a full day's worth of per-reading trace lines wouldn't be practical to read.
+- Added `/storage/api-logs/` to `.gitignore` — same sensitivity as the existing `storage/import-logs/` entry (real personal health data verbatim).
+
 ## V0.1.3 — 2026-09-08 19:15
 ### Changes
 - **Shared date across tabs**: the date is now lifted up to `App.jsx` and rendered once above the tab switcher, instead of each page (Food/Heart Rate/Sleep/Exercise) keeping its own independent date state — switching tabs now keeps the same day selected rather than each page silently resetting to today.

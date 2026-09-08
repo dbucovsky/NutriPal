@@ -82,6 +82,14 @@ No data in this account: `vo2-max`, `blood-glucose` (expected — not tracked by
 
 **Verified idempotent**: ran the sync three times in a row against the same 2-day window; the third run reported no real change for every row in every category before running the real default 7-day sync.
 
+## Request/response logging and replay (done, verified, 2026-09-08)
+
+Every live run of `scripts/sync-google-health.php` records the raw request/response for every API call it makes to `storage/api-logs/<run_id>/<endpoint>.jsonl` (`run_id` matches the timestamp already used for that run's `storage/import-logs/*.log` file), plus a `manifest.json` capturing the run's `--full`/`--days` window. On by default — `--no-log` opts out, since a `--full` resync over years of heart-rate data can log hundreds of MB. The `Authorization` header is deliberately never written to these logs (verified by grepping a real run's output for any token material — none found); everything else, including full response bodies, is recorded verbatim.
+
+`--replay=<run_id>` re-runs the exact same parsing/ingestion code against a previously-recorded run instead of the network: no OAuth token refresh happens at all, and the original run's `--full`/`--days` window is restored automatically from its `manifest.json`. Verified against a real run: replaying completed in 0.3s versus the original 13.2s live run (confirming zero network calls), and every category correctly reported "already exists, no change" — the DB ended up in the identical state without hitting Google again. This is what makes re-testing a parsing fix, or auditing exactly what a run received, cheap and reproducible — and it sidesteps the fact that the live API's rolling window means re-querying later might not even return the same data any more.
+
+`--debug` additionally traces per-record processing decisions to the human-readable log (matched food/brand and real-gram-vs-fallback match for nutrition, session/action for sleep/exercise/measurements/daily-resting-heart-rate) — per-*page*, not per-row, for the three high-volume insert-missing categories (steps/heart-rate/HRV), since tracing every individual reading wouldn't be practical to read. Off by default.
+
 ## Open items
 
 - **Cross-source duplication between Health Connect and the live API is not resolved.** Health Connect's `api_uid` (its own local `uuid`) and the live API's `api_uid` (its cloud dataPoint id) are different ID spaces for the same real-world event — `UNIQUE(user_id, api_uid)` can't detect a sleep session / exercise session / weight reading / food log entry already exists from the other source. No automated mitigation yet; the practical guidance until real reconciliation is designed is to pick a sync window that starts after the last Health Connect export's own coverage.

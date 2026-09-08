@@ -23,6 +23,11 @@ nutripal.code-workspace
 # weights, etc.) — never committed.
 /storage/import-logs/
 
+# Raw sync API request/response logs (scripts/sync-google-health.php) — the
+# whole point is a faithful record of real personal health data returned by
+# Google, so this is exactly as sensitive as the import logs above.
+/storage/api-logs/
+
 # Real personal data exports (Takeout zips, Health Connect export) used to
 # test the importers against real data — never committed.
 /ref/

@@ -6,9 +6,48 @@ declare(strict_types=1);
 // Connect bulk importer (scripts/import-health-connect.php) populates.
 //
 // Usage:
-//   php scripts/sync-google-health.php            (incremental: last 7 days)
-//   php scripts/sync-google-health.php --days=N    (incremental: last N days)
-//   php scripts/sync-google-health.php --full      (entire available history)
+//   php scripts/sync-google-health.php              (incremental: last 7 days)
+//   php scripts/sync-google-health.php --days=N      (incremental: last N days)
+//   php scripts/sync-google-health.php --full        (entire available history)
+//   php scripts/sync-google-health.php --replay=RUN  (replay a prior run's
+//                                                      recorded API responses
+//                                                      instead of live calls)
+//   php scripts/sync-google-health.php --no-log      (skip API request/response
+//                                                      logging for this run)
+//   php scripts/sync-google-health.php --debug       (also trace per-record
+//                                                      processing decisions)
+//
+// Every live run records the raw request/response for every API call it
+// makes to storage/api-logs/<run_id>/<endpoint>.jsonl (run_id is the same
+// timestamp used for this run's storage/import-logs/*.log file, so the two
+// are trivially correlated), plus a manifest.json capturing this run's
+// --full/--days window. This is on by default (--no-log opts out — a --full
+// resync over years of heart-rate data can log hundreds of MB) specifically
+// so a run's exact inputs are available afterwards for debugging, without
+// having to remember to ask for that up front. The Authorization header is
+// never written to these logs — logging a bearer token to a plaintext file
+// that persists indefinitely, even gitignored, is a real credential-exposure
+// risk, not just noise.
+//
+// --replay=RUN re-runs the exact same parsing/ingestion code against a
+// previously-recorded run's logs instead of the network: no OAuth token
+// refresh happens, no live calls are made, and the original run's
+// --full/--days window is restored automatically from its manifest.json
+// (override with a fresh --days=N/--full if you deliberately want a
+// different window applied to the same recorded data). This is what makes
+// re-testing a parsing fix, or auditing exactly what a run received, cheap
+// and reproducible instead of needing to hit the live API — and rolling API
+// windows mean the same query re-run live later might not even return the
+// same data any more.
+//
+// --debug adds one logLine() per processed record (via the new debugLog()
+// helper) to the human-readable run log — matched food/brand and real-gram-
+// vs-fallback match for nutrition, session/action for sleep/exercise/
+// measurements/daily-resting-heart-rate. For the three high-volume
+// insert-missing categories (steps, heart-rate, HRV) this traces per-*page*
+// instead of per-row (tens of thousands of per-row lines wouldn't be
+// practical to read) — a deliberate scope choice, same spirit as this file's
+// other disclosed tradeoffs.
 //
 // Two genuinely different sync strategies, per category, confirmed against
 // real API responses (storage/debug-metrics/*.json) rather than assumed:
@@ -64,18 +103,29 @@ require __DIR__ . '/../src/Database.php';
 Env::load(__DIR__ . '/../.env');
 
 $isFull = in_array('--full', $argv, true);
+$fullArgGiven = $isFull;
 $days = 7;
+$daysArgGiven = false;
+$noLog = in_array('--no-log', $argv, true);
+$debug = in_array('--debug', $argv, true);
+$replayRunId = null;
 foreach ($argv as $arg) {
     if (preg_match('/^--days=(\d+)$/', $arg, $m)) {
         $days = (int) $m[1];
+        $daysArgGiven = true;
+    }
+    if (preg_match('/^--replay=(.+)$/', $arg, $m)) {
+        $replayRunId = $m[1];
     }
 }
+
+$runId = date('Ymd-His');
 
 $logDir = __DIR__ . '/../storage/import-logs';
 if (!is_dir($logDir)) {
     mkdir($logDir, 0777, true);
 }
-$logPath = $logDir . '/sync-google-health-' . date('Ymd-His') . '.log';
+$logPath = $logDir . '/sync-google-health-' . $runId . ($replayRunId !== null ? "-replay-of-{$replayRunId}" : '') . '.log';
 $logFile = fopen($logPath, 'w');
 
 $runStats = [];
@@ -95,31 +145,185 @@ function bumpStat(string $category, string $key, int $by = 1): void
     $runStats[$category][$key] = ($runStats[$category][$key] ?? 0) + $by;
 }
 
-logLine("=== NutriPal Google Health API sync starting ===");
-logLine($isFull ? "Mode: FULL resync (entire available history)" : "Mode: incremental, last {$days} day(s)");
-logLine("Log: {$logPath}");
-
-$tokenStore = new TokenStore(__DIR__ . '/../storage/google-tokens.json');
-$tokens = $tokenStore->load();
-if ($tokens === null || !isset($tokens['refresh_token'])) {
-    logLine("ERROR: no stored tokens with a refresh_token. Run the OAuth flow (auth-login.php) first.");
-    exit(1);
+/** One logLine() per processed record/page when --debug is set; a silent no-op otherwise. */
+function debugLog(string $message): void
+{
+    global $debug;
+    if ($debug) {
+        logLine("DEBUG {$message}");
+    }
 }
 
-$oauth = new GoogleOAuth(
-    clientId: Env::require('GOOGLE_CLIENT_ID'),
-    clientSecret: Env::require('GOOGLE_CLIENT_SECRET'),
-    redirectUri: Env::require('GOOGLE_REDIRECT_URI')
-);
-$refreshed = $oauth->refreshAccessToken($tokens['refresh_token']);
-$tokenStore->save($refreshed);
-$accessToken = $refreshed['access_token'];
+/**
+ * Append-only JSONL writer for one run's raw API request/response pairs —
+ * one file per $logKey (endpoint name), opened lazily. Never receives the
+ * Authorization header; see the file header comment for why.
+ */
+final class ApiLogger
+{
+    private array $handles = [];
+
+    public function __construct(private string $runDir)
+    {
+        if (!is_dir($this->runDir)) {
+            mkdir($this->runDir, 0777, true);
+        }
+    }
+
+    public function record(string $logKey, array $request, array $response): void
+    {
+        if (!isset($this->handles[$logKey])) {
+            $this->handles[$logKey] = fopen("{$this->runDir}/{$logKey}.jsonl", 'a');
+        }
+        $line = json_encode(['timestamp' => date('c'), 'request' => $request, 'response' => $response]);
+        fwrite($this->handles[$logKey], $line . "\n");
+    }
+
+    public function writeManifest(array $manifest): void
+    {
+        file_put_contents("{$this->runDir}/manifest.json", json_encode($manifest, JSON_PRETTY_PRINT));
+    }
+}
+
+/**
+ * Reads a prior run's ApiLogger output back, in the same order it was
+ * recorded, so --replay can feed the exact same parsing code without any
+ * network access. Once a $logKey's recorded responses are exhausted, hands
+ * back a synthetic empty page — streamDataPoints()'s own "no more points"
+ * check already treats that as the end of pagination, so no special-casing
+ * is needed on the reading side.
+ */
+final class ReplayReader
+{
+    private array $lines = [];
+    private array $cursor = [];
+
+    public function __construct(private string $runDir)
+    {
+    }
+
+    public function readManifest(): ?array
+    {
+        $path = "{$this->runDir}/manifest.json";
+        return is_file($path) ? json_decode(file_get_contents($path), true) : null;
+    }
+
+    private function ensureLoaded(string $logKey): void
+    {
+        if (isset($this->lines[$logKey])) {
+            return;
+        }
+        $path = "{$this->runDir}/{$logKey}.jsonl";
+        $entries = [];
+        if (is_file($path)) {
+            foreach (file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+                $entries[] = json_decode($line, true);
+            }
+        }
+        $this->lines[$logKey] = $entries;
+        $this->cursor[$logKey] = 0;
+    }
+
+    public function next(string $logKey): array
+    {
+        $this->ensureLoaded($logKey);
+        $i = $this->cursor[$logKey];
+        if (!isset($this->lines[$logKey][$i])) {
+            return ['status' => 200, 'body' => json_encode(['dataPoints' => []])];
+        }
+        $this->cursor[$logKey]++;
+        return $this->lines[$logKey][$i]['response'];
+    }
+}
+
+/** The only place curl gets invoked — replay mode short-circuits it entirely. */
+function apiCall(string $url, string $logKey, string $accessToken): array
+{
+    global $apiLogger, $replayReader;
+
+    if ($replayReader !== null) {
+        return $replayReader->next($logKey);
+    }
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $accessToken, 'Accept: application/json'],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 30,
+    ]);
+    $body = curl_exec($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    $result = ['status' => $status, 'body' => $body === false ? '' : $body];
+
+    if ($apiLogger !== null) {
+        $apiLogger->record($logKey, ['method' => 'GET', 'url' => $url], $result);
+    }
+
+    return $result;
+}
+
+logLine("=== NutriPal Google Health API sync starting ===");
+
+$apiLogDir = __DIR__ . '/../storage/api-logs';
+$apiLogger = null;
+$replayReader = null;
+
+if ($replayRunId !== null) {
+    $replayReader = new ReplayReader("{$apiLogDir}/{$replayRunId}");
+    $manifest = $replayReader->readManifest();
+    if ($manifest === null) {
+        logLine("ERROR: no manifest.json found for replay run '{$replayRunId}' under storage/api-logs/ — was it logged?");
+        exit(1);
+    }
+    if (!$daysArgGiven && isset($manifest['days'])) {
+        $days = (int) $manifest['days'];
+    }
+    if (!$fullArgGiven && isset($manifest['isFull'])) {
+        $isFull = (bool) $manifest['isFull'];
+    }
+    logLine("Mode: REPLAY of run '{$replayRunId}' — no live API calls will be made");
+} elseif (!$noLog) {
+    $apiLogger = new ApiLogger("{$apiLogDir}/{$runId}");
+}
+
+logLine($isFull ? "Mode: FULL resync (entire available history)" : "Mode: incremental, last {$days} day(s)");
+logLine("Log: {$logPath}");
+if ($debug) {
+    logLine("Debug logging: ON");
+}
+
+if ($replayRunId !== null) {
+    logLine("Skipping OAuth token refresh — replay mode makes no network calls");
+    $accessToken = '';
+} else {
+    $tokenStore = new TokenStore(__DIR__ . '/../storage/google-tokens.json');
+    $tokens = $tokenStore->load();
+    if ($tokens === null || !isset($tokens['refresh_token'])) {
+        logLine("ERROR: no stored tokens with a refresh_token. Run the OAuth flow (auth-login.php) first.");
+        exit(1);
+    }
+
+    $oauth = new GoogleOAuth(
+        clientId: Env::require('GOOGLE_CLIENT_ID'),
+        clientSecret: Env::require('GOOGLE_CLIENT_SECRET'),
+        redirectUri: Env::require('GOOGLE_REDIRECT_URI')
+    );
+    $refreshed = $oauth->refreshAccessToken($tokens['refresh_token']);
+    $tokenStore->save($refreshed);
+    $accessToken = $refreshed['access_token'];
+}
 
 $pdo = Database::connect();
 logLine("Connected to MySQL database " . Env::get('DB_NAME'));
 
 $userId = 2;
 $cutoff = $isFull ? null : (new DateTimeImmutable('today', new DateTimeZone('UTC')))->modify("-{$days} days");
+
+if ($apiLogger !== null) {
+    $apiLogger->writeManifest(['isFull' => $isFull, 'days' => $days, 'startedAt' => date('c')]);
+}
 
 // ----------------------------------------------------------------------------
 // Lookup caches
@@ -263,9 +467,13 @@ function pointCivilDate(string $bodyKey, array $point): ?DateTimeImmutable
  * Streams every dataPoint for one Google Health data type, newest-first,
  * calling $onPoint per point. Stops at $cutoff (client-side, since only
  * some data types accept server-side interval filtering) or, in full mode
- * ($cutoff === null), once the API stops returning pages.
+ * ($cutoff === null), once the API stops returning pages. $onPageComplete,
+ * if given, fires once per page (after every point in it has been passed to
+ * $onPoint) with (page number, point count) — used for per-page --debug
+ * tracing on the high-volume categories where per-point tracing isn't
+ * practical.
  */
-function streamDataPoints(string $accessToken, string $dataType, string $bodyKey, ?DateTimeImmutable $cutoff, callable $onPoint): void
+function streamDataPoints(string $accessToken, string $dataType, string $bodyKey, ?DateTimeImmutable $cutoff, callable $onPoint, ?callable $onPageComplete = null): void
 {
     $pageToken = null;
     $maxPages = 20000;
@@ -277,22 +485,16 @@ function streamDataPoints(string $accessToken, string $dataType, string $bodyKey
         }
         $url = 'https://health.googleapis.com/v4/users/me/dataTypes/' . $dataType . '/dataPoints?' . http_build_query($params);
 
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $accessToken, 'Accept: application/json'],
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 30,
-        ]);
-        $body = curl_exec($ch);
-        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        $result = apiCall($url, $dataType, $accessToken);
+        $status = $result['status'];
+        $body = $result['body'];
 
-        if ($body === false || $status !== 200) {
+        if ($status !== 200) {
             logLine("ERROR fetching {$dataType} page {$page}: HTTP {$status}");
             return;
         }
-        $result = json_decode($body, true) ?? [];
-        $points = $result['dataPoints'] ?? [];
+        $decoded = json_decode($body, true) ?? [];
+        $points = $decoded['dataPoints'] ?? [];
         if (empty($points)) {
             return;
         }
@@ -309,7 +511,11 @@ function streamDataPoints(string $accessToken, string $dataType, string $bodyKey
             $onPoint($point);
         }
 
-        $pageToken = $result['nextPageToken'] ?? null;
+        if ($onPageComplete !== null) {
+            $onPageComplete($page, count($points));
+        }
+
+        $pageToken = $decoded['nextPageToken'] ?? null;
         if ($reachedCutoff || $pageToken === null || $pageToken === '') {
             return;
         }
@@ -392,17 +598,11 @@ function fetchFoodServings(string $accessToken, string $foodRef, array &$cache):
         return $cache[$foodRef];
     }
     $url = 'https://health.googleapis.com/v4/' . $foodRef;
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [
-        CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $accessToken, 'Accept: application/json'],
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT => 20,
-    ]);
-    $body = curl_exec($ch);
-    $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
+    $result = apiCall($url, 'food', $accessToken);
+    $status = $result['status'];
+    $body = $result['body'];
 
-    if ($body === false || $status !== 200) {
+    if ($status !== 200) {
         $cache[$foodRef] = null;
         return null;
     }
@@ -711,12 +911,14 @@ function syncNutrition(string $accessToken, PDO $pdo, int $userId, int $ingestio
                 $pdo, $userId, $massDimensionId, $name, $brandName, $gramsForEntry, $servingAmount, $unitLabel, $gramsPerUnit,
                 $energyKcal, $proteinG, $carbG, $fatG, $micronutrients, $nutrientIds, $gramUnitId
             );
+            $matchType = 'real_gram';
             bumpStat('nutrition', 'real_gram_match', 1);
         } else {
             [$foodId, $wasNew, $finalServingAmount, $servingUnitId] = findOrCreateFoodFallback(
                 $pdo, $userId, $massDimensionId, $name, $brandName, $energyKcal, $proteinG, $carbG, $fatG,
                 $micronutrients, $nutrientIds, $gramUnitId, $fallbackServingUnitCache
             );
+            $matchType = 'fallback';
             bumpStat('nutrition', 'fallback_placeholder_match', 1);
         }
         bumpStat('nutrition', $wasNew ? 'foods_db_versions_created' : 'foods_db_versions_reused', 1);
@@ -743,6 +945,9 @@ function syncNutrition(string $accessToken, PDO $pdo, int $userId, int $ingestio
             provenanceNow($userId)
         );
         bumpStat('nutrition', $action, 1);
+        debugLog("nutrition api_uid={$apiUid} name=\"{$name}\"" . ($brandName !== null ? " brand=\"{$brandName}\"" : '')
+            . " match={$matchType} food_id={$foodId} " . ($wasNew ? 'new_version' : 'existing_version')
+            . " serving_amount={$finalServingAmount} action={$action}");
     });
 
     logLine("Nutrition done: " . json_encode($GLOBALS['runStats']['nutrition'] ?? []));
@@ -785,6 +990,7 @@ function syncSleep(string $accessToken, PDO $pdo, int $userId, int $ingestionSou
             provenanceNow($userId)
         );
         bumpStat('sleep_sessions', $action, 1);
+        debugLog("sleep api_uid={$apiUid} start={$s['interval']['startTime']} end={$s['interval']['endTime']} action={$action}");
 
         $findSession = $pdo->prepare("SELECT id FROM sleep_sessions WHERE user_id = ? AND api_uid = ?");
         $findSession->execute([$userId, $apiUid]);
@@ -822,6 +1028,7 @@ function syncSleep(string $accessToken, PDO $pdo, int $userId, int $ingestionSou
             $insertStage->execute([$userId, $sessionId, $stageTypeId, $startTime, $endTime, $ingestionSource]);
             bumpStat('sleep_stages', 'inserted', 1);
         }
+        debugLog("sleep_stages session_id={$sessionId} stages_seen=" . count($s['stages'] ?? []));
     });
 }
 
@@ -898,6 +1105,7 @@ function syncExercise(string $accessToken, PDO $pdo, int $userId, int $ingestion
             provenanceNow($userId)
         );
         bumpStat('exercise', $action, 1);
+        debugLog("exercise api_uid={$apiUid} activity=\"" . ($e['displayName'] ?? $e['exerciseType'] ?? '?') . "\" action={$action}");
     });
 }
 
@@ -938,6 +1146,7 @@ function syncMeasurement(string $accessToken, PDO $pdo, string $dataType, string
             provenanceNow($userId)
         );
         bumpStat($dataType, $action, 1);
+        debugLog("{$dataType} api_uid={$apiUid} value={$body[$valueField]} action={$action}");
     });
 }
 
@@ -975,6 +1184,7 @@ function syncDailyRestingHeartRate(string $accessToken, PDO $pdo, int $userId, i
             provenanceNow($userId)
         );
         bumpStat('daily_resting_heart_rate', $action, 1);
+        debugLog("daily_resting_heart_rate date=" . civilDate($d['date']) . " bpm={$d['beatsPerMinute']} action={$action}");
     });
 }
 
@@ -1012,9 +1222,12 @@ function syncInsertMissingSeries(string $accessToken, PDO $pdo, string $dataType
          VALUES (?, ?, ?, ?, ?, ?)"
     );
 
+    $pageInserted = 0;
+    $pageSkipped = 0;
+
     streamDataPoints($accessToken, $dataType, $bodyKey, $cutoff, function (array $point) use (
         $pdo, $bodyKey, $valueField, &$seen, $insert, $userId, $ingestionSource, $recordingMethodIds,
-        &$dataSourceIds, $insertDataSourceStmt, $dataType
+        &$dataSourceIds, $insertDataSourceStmt, $dataType, &$pageInserted, &$pageSkipped
     ) {
         bumpStat($dataType, 'rows_seen', 1);
         $body = $point[$bodyKey];
@@ -1026,6 +1239,7 @@ function syncInsertMissingSeries(string $accessToken, PDO $pdo, string $dataType
         $readingTime = toMysqlDateTime($timeIso);
         if (isset($seen[$readingTime])) {
             bumpStat($dataType, 'skipped_duplicate', 1);
+            $pageSkipped++;
             return;
         }
         $seen[$readingTime] = true;
@@ -1038,6 +1252,13 @@ function syncInsertMissingSeries(string $accessToken, PDO $pdo, string $dataType
 
         $insert->execute([$userId, $readingTime, $value, $dataSourceId, $recordingMethodId, $ingestionSource]);
         bumpStat($dataType, 'inserted', 1);
+        $pageInserted++;
+    }, function (int $page, int $pointCount) use ($dataType, &$pageInserted, &$pageSkipped) {
+        // Per-page, not per-row — a full day/year of steps/heart-rate/HRV can
+        // be tens of thousands of rows, too many to trace individually.
+        debugLog("{$dataType} page={$page} points={$pointCount} inserted={$pageInserted} skipped={$pageSkipped}");
+        $pageInserted = 0;
+        $pageSkipped = 0;
     });
 }
 
