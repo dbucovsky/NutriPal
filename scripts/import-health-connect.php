@@ -682,10 +682,12 @@ logLine("Sleep stages done: {$stageCount} rows processed");
 // fallback for codes not yet covered here). Extend as more codes turn up.
 const HC_EXERCISE_TYPE_NAMES = [
     4 => 'Biking',
+    11 => 'Exercise Class',
     33 => 'Running',
     34 => 'Running (Treadmill)',
     49 => 'Swimming (Pool)',
     53 => 'Walking',
+    58 => 'Other Workout',
     59 => 'Stair Climbing (Machine)',
     60 => 'Elliptical',
 ];

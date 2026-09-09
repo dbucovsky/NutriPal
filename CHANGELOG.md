@@ -1,5 +1,9 @@
 # Changelog
 
+## V0.1.8 — 2026-09-09 20:00
+### Changes
+- **Mapped the two remaining Health Connect `exercise_type` codes found in this account's real data**: `58`→Other Workout (256 sessions — the single most common unmapped code, larger than several already-mapped ones), `11`→Exercise Class (6 sessions). Verified against Android's `ExerciseSessionType` documentation the same way as the first seven, not guessed. Every real exercise session in this account now shows a readable name — no `HC_<code>` labels left.
+
 ## V0.1.7 — 2026-09-09 19:30
 ### Changes
 - **Fixed a real design flaw in V0.1.6's cross-source dedup: skipping a cross-source match silently dropped complementary data the other source had.** Health Connect's exercise sessions never carry calories/distance/steps/average-heart-rate at all (a known Health Connect limitation, already documented) — so when the live sync found a session HC had already recorded and just skipped it, those fields stayed permanently `NULL` even though the live API's own copy of the same session had real values for them. Caught directly by inspecting a real day's exercise entries after the V0.1.6 fix and finding HC-sourced sessions still showing no calories/distance/steps.
