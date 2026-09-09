@@ -569,6 +569,9 @@ $insertSleepSession = $pdo->prepare(
     "INSERT INTO sleep_sessions (user_id, start_time, end_time, data_source_id, recording_method_id, ingestion_source_id, api_uid)
      VALUES (?, ?, ?, ?, ?, ?, ?)"
 );
+$findSleepSessionByApiUid = $pdo->prepare(
+    "SELECT id FROM sleep_sessions WHERE user_id = ? AND api_uid = ?"
+);
 $sleepRowIdToId = [];
 $sessionCount = 0;
 $pdo->beginTransaction();
@@ -587,6 +590,15 @@ foreach ($hc->query("SELECT * FROM sleep_session_record_table") as $row) {
         } catch (PDOException $e) {
             if ((int) ($e->errorInfo[1] ?? 0) === 1062) {
                 bumpStat('sleep_sessions', 'skipped_duplicate', 1);
+                // Still record the mapping for an already-known session so
+                // its stages remain reachable below — without this, a
+                // re-import silently drops every stage for every session it
+                // has already seen (real bug, found via a real re-import).
+                $findSleepSessionByApiUid->execute([$userId, $apiUid]);
+                $existingId = $findSleepSessionByApiUid->fetchColumn();
+                if ($existingId !== false) {
+                    $sleepRowIdToId[(int) $row['row_id']] = (int) $existingId;
+                }
                 continue;
             }
             throw $e;

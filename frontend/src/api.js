@@ -41,3 +41,46 @@ export function getSleep(userId, date) {
 export function getExercise(userId, date) {
   return getJson('exercise.php', userId, date, 'Failed to load exercise')
 }
+
+export async function runSync(body) {
+  const res = await fetch('/api/run-sync.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || 'Sync failed')
+  }
+  return data
+}
+
+export async function getSyncRuns() {
+  const res = await fetch('/api/sync-runs.php')
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to load sync runs')
+  }
+  return data.runs
+}
+
+export async function getSyncProgress(type) {
+  const res = await fetch(`/api/sync-progress.php?type=${type}`)
+  if (!res.ok) {
+    throw new Error('Failed to load progress')
+  }
+  return res.json()
+}
+
+export async function importHealthConnect(path) {
+  const res = await fetch('/api/import-hc.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || 'Import failed')
+  }
+  return data
+}

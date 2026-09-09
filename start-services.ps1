@@ -18,7 +18,13 @@ if (Test-PortListening -Port $port) {
     Write-Host "  Already running - skipping." -ForegroundColor Yellow
 } else {
     Write-Host "  Starting..." -ForegroundColor Green
-    Start-Process powershell -WorkingDirectory $projectRoot -ArgumentList '-NoExit', '-Command', "& '$phpExe' -S localhost:$port -t public"
+    # -d overrides apply only to this dev server process, not global
+    # php.ini: raised upload/post limits for the Health Connect export
+    # upload (real exports have been ~500MB), and unlimited execution
+    # time since the sync/import endpoints run synchronously and can
+    # take minutes.
+    $phpArgs = "-d upload_max_filesize=1024M -d post_max_size=1024M -d max_execution_time=0 -d max_input_time=-1 -S localhost:$port -t public"
+    Start-Process powershell -WorkingDirectory $projectRoot -ArgumentList '-NoExit', '-Command', "& '$phpExe' $phpArgs"
 }
 
 Write-Host ""

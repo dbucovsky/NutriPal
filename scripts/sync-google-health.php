@@ -1217,8 +1217,14 @@ function syncInsertMissingSeries(string $accessToken, PDO $pdo, string $dataType
     $seen = existingTimestamps($pdo, $table, $userId, $cutoff);
     logLine(count($seen) . " existing {$table} timestamps loaded for dedup" . ($cutoff === null ? " (full mode: dedup skipped, expect re-run incrementally instead)" : ""));
 
+    // IGNORE, not a plain INSERT: full-mode runs deliberately skip the
+    // in-memory $seen preload above, so this is the only guard against a
+    // real DB-level unique constraint (e.g. heart_rate_readings' natural
+    // (user_id, reading_time) key) rejecting a reading this same run's HC
+    // import already inserted for the identical timestamp. Found via a real
+    // --full run crashing on exactly that overlap.
     $insert = $pdo->prepare(
-        "INSERT INTO {$table} (user_id, reading_time, {$valueColumn}, data_source_id, recording_method_id, ingestion_source_id)
+        "INSERT IGNORE INTO {$table} (user_id, reading_time, {$valueColumn}, data_source_id, recording_method_id, ingestion_source_id)
          VALUES (?, ?, ?, ?, ?, ?)"
     );
 
@@ -1251,8 +1257,13 @@ function syncInsertMissingSeries(string $accessToken, PDO $pdo, string $dataType
         $value = ($dataType === 'heart-rate-variability') ? (float) $rawValue : (int) round((float) $rawValue);
 
         $insert->execute([$userId, $readingTime, $value, $dataSourceId, $recordingMethodId, $ingestionSource]);
-        bumpStat($dataType, 'inserted', 1);
-        $pageInserted++;
+        if ($insert->rowCount() > 0) {
+            bumpStat($dataType, 'inserted', 1);
+            $pageInserted++;
+        } else {
+            bumpStat($dataType, 'skipped_duplicate', 1);
+            $pageSkipped++;
+        }
     }, function (int $page, int $pointCount) use ($dataType, &$pageInserted, &$pageSkipped) {
         // Per-page, not per-row — a full day/year of steps/heart-rate/HRV can
         // be tens of thousands of rows, too many to trace individually.

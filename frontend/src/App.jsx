@@ -4,6 +4,7 @@ import FoodLog from './components/FoodLog'
 import HeartRate from './components/HeartRate'
 import Sleep from './components/Sleep'
 import Exercise from './components/Exercise'
+import Sync from './components/Sync'
 import DateNav from './components/DateNav'
 import { todayLocal } from './dateUtils'
 import './App.css'
@@ -15,6 +16,7 @@ const TABS = [
   { key: 'heart-rate', label: 'Heart Rate', Component: HeartRate },
   { key: 'sleep', label: 'Sleep', Component: Sleep },
   { key: 'exercise', label: 'Exercise', Component: Exercise },
+  { key: 'sync', label: 'Sync', Component: Sync },
 ]
 
 function loadStoredUser() {

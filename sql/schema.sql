@@ -920,6 +920,13 @@ CREATE TABLE steps_readings (
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
     UNIQUE KEY uq_steps_readings_api_uid (user_id, api_uid),
+    -- Health Connect gives steps a real per-row uuid, so the key above
+    -- catches HC-sourced duplicates - but the live API has no native id for
+    -- steps at all, leaving api_uid NULL (a no-op) for every live-sync
+    -- insert. A real --full live sync duplicated ~138,000 rows this way
+    -- (its dedup preload is deliberately skipped in full mode). Same fix as
+    -- heart_rate_readings: enforce the real identity directly.
+    UNIQUE KEY uq_steps_readings_reading (user_id, reading_time),
     KEY idx_steps_readings_time (user_id, reading_time),
     CONSTRAINT fk_steps_readings_user FOREIGN KEY (user_id) REFERENCES users(id),
     CONSTRAINT fk_steps_readings_data_source FOREIGN KEY (data_source_id) REFERENCES lut_data_source(id),
@@ -960,6 +967,16 @@ CREATE TABLE heart_rate_readings (
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
     UNIQUE KEY uq_heart_rate_readings_api_uid (user_id, api_uid),
+    -- Individual bpm samples have no native per-sample id from any source
+    -- (Health Connect's series table and the live API's per-point data both
+    -- lack one — only a parent session/recording carries a uuid, if that).
+    -- api_uid is therefore always NULL here, making the constraint above a
+    -- no-op for this table. One reading per user+timestamp is this table's
+    -- actual real-world identity (already assumed by the live sync's
+    -- insert-missing dedup) - enforce it for real so every ingest path is
+    -- naturally idempotent via INSERT IGNORE, not just the live API path
+    -- (which happens to already dedup itself in PHP before inserting).
+    UNIQUE KEY uq_heart_rate_readings_reading (user_id, reading_time),
     KEY idx_heart_rate_readings_time (user_id, reading_time),
     CONSTRAINT fk_heart_rate_readings_user FOREIGN KEY (user_id) REFERENCES users(id),
     CONSTRAINT fk_heart_rate_readings_data_source FOREIGN KEY (data_source_id) REFERENCES lut_data_source(id),
@@ -1003,6 +1020,12 @@ CREATE TABLE heart_rate_variability_readings (
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
     UNIQUE KEY uq_heart_rate_variability_readings_api_uid (user_id, api_uid),
+    -- Same latent gap as steps_readings/heart_rate_readings, fixed
+    -- proactively here even though it hasn't actually duplicated yet: HC
+    -- rows get a real api_uid, but the live API's HRV points have no native
+    -- id, leaving api_uid NULL for every live-sync insert. Both tables
+    -- share the same generic insert function in sync-google-health.php.
+    UNIQUE KEY uq_heart_rate_variability_readings_reading (user_id, reading_time),
     KEY idx_heart_rate_variability_readings_time (user_id, reading_time),
     CONSTRAINT fk_heart_rate_variability_readings_user FOREIGN KEY (user_id) REFERENCES users(id),
     CONSTRAINT fk_heart_rate_variability_readings_data_source FOREIGN KEY (data_source_id) REFERENCES lut_data_source(id),
@@ -1282,10 +1305,14 @@ CREATE TABLE nutripal_hist.sleep_sessions_hist (
 -- Confirmed via real data (both the live API's embedded sleep.stages[] and
 -- Health Connect's sleep_stages_table) that NEITHER remaining source gives a
 -- native per-stage ID — api_uid stays nullable here and, realistically,
--- will most often be NULL. No DB-level duplicate guard exists for this table
--- as a result (fingerprint dropped everywhere, and no natural-columns
--- fallback was added either) — any resync-duplicate prevention is a deferred
--- application-logic concern, same as steps/heart-rate/HRV.
+-- will most often be NULL, making the api_uid unique key below a no-op.
+-- A stage's real identity is its (session, type, start) triple — a session
+-- can't have two stages of the same type starting at the same instant —
+-- so that's enforced as a real DB-level constraint (see
+-- uq_sleep_stages_natural below). Found via a re-import of the same real HC
+-- export duplicating nothing here only by accident (a related bug meant
+-- every stage for an already-known session was silently dropped instead of
+-- re-checked); fixed together in import-health-connect.php.
 -- data_source_id/recording_method_id deliberately omitted — a stage
 -- inherits its parent session's device/recording-method, no need to repeat
 -- it per stage row.
@@ -1303,6 +1330,7 @@ CREATE TABLE sleep_stages (
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
     UNIQUE KEY uq_sleep_stages_api_uid (user_id, api_uid),
+    UNIQUE KEY uq_sleep_stages_natural (user_id, sleep_session_id, stage_type_id, start_time),
     KEY idx_sleep_stages_session (sleep_session_id),
     CONSTRAINT fk_sleep_stages_user FOREIGN KEY (user_id) REFERENCES users(id),
     CONSTRAINT fk_sleep_stages_session FOREIGN KEY (sleep_session_id) REFERENCES sleep_sessions(id),
