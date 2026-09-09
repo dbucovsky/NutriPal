@@ -349,6 +349,7 @@ $dataSourceIds = loadLookup($pdo, 'lut_data_source');
 $activityTypeIds = loadLookup($pdo, 'lut_activity_type');
 $calcMethodIds = loadLookup($pdo, 'lut_heart_rate_calc_method');
 $ingestionSourceApi = (int) $pdo->query("SELECT id FROM lut_ingestion_source WHERE name='google_health_api'")->fetchColumn();
+$ingestionSourceMixed = (int) $pdo->query("SELECT id FROM lut_ingestion_source WHERE name='mixed'")->fetchColumn();
 $gramUnitId = $unitIds['gram'];
 $mmUnitId = $unitIds['millimeter'];
 $meterUnitId = $unitIds['meter'];
@@ -523,6 +524,11 @@ function streamDataPoints(string $accessToken, string $dataType, string $bodyKey
     logLine("WARN {$dataType}: hit the {$maxPages}-page safety cap without exhausting pagination");
 }
 
+function looksLikeMysqlDateTime($val): bool
+{
+    return is_string($val) && preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $val) === 1;
+}
+
 /**
  * Generic upsert for the categories with a real native ID (or, for
  * daily_resting_heart_rate, a real natural key). $data is compared against
@@ -537,15 +543,20 @@ function streamDataPoints(string $accessToken, string $dataType, string $bodyKey
  * the same real-world event (sleep/exercise sessions, measurements) - if the
  * primary (user_id, api_uid) lookup misses but this alternate lookup (e.g.
  * user_id + start_time) hits, the row already exists under the other
- * source's api_uid. Skip rather than insert (would duplicate) or update
- * (would overwrite that source's provenance/data_source_id with this run's,
- * and - for measurements specifically - its slightly different rounding,
- * for no real benefit): whichever source recorded it first stays
- * authoritative. Confirmed via real data this only misses a small minority
- * of cross-source pairs (device-only sessions the other source never saw).
+ * source's api_uid. This does NOT just skip: Health Connect and the live API
+ * each have fields the other lacks entirely (e.g. Health Connect's exercise
+ * sessions never carry calories/distance/steps/avg-heart-rate at all), so a
+ * blind skip would silently drop real, complementary data the other source
+ * has. Instead: any $data field that's genuinely new (existing value NULL,
+ * incoming non-NULL) gets filled in via UPDATE; a field where both sources
+ * disagree on a non-NULL value is a real conflict, recorded by filling it in
+ * anyway AND flipping ingestion_source_id to the 'mixed' sentinel
+ * ($mixedIngestionSourceId) - reserved for exactly this since the schema was
+ * first drafted, now actually exercised. A cross-source match with nothing
+ * new to add is skipped, same as before.
  */
 function upsertByNaturalKey(PDO $pdo, string $table, array $whereCols, array $whereVals, array $data, array $provenance,
-    ?array $crossSourceCols = null, ?array $crossSourceVals = null): string
+    ?array $crossSourceCols = null, ?array $crossSourceVals = null, ?int $mixedIngestionSourceId = null): string
 {
     $whereSql = implode(' AND ', array_map(fn($c) => "{$c} = ?", $whereCols));
     $stmt = $pdo->prepare("SELECT * FROM {$table} WHERE {$whereSql}");
@@ -554,10 +565,70 @@ function upsertByNaturalKey(PDO $pdo, string $table, array $whereCols, array $wh
 
     if ($existing === false && $crossSourceCols !== null) {
         $altSql = implode(' AND ', array_map(fn($c) => "{$c} = ?", $crossSourceCols));
-        $altStmt = $pdo->prepare("SELECT 1 FROM {$table} WHERE {$altSql}");
+        $altStmt = $pdo->prepare("SELECT * FROM {$table} WHERE {$altSql}");
         $altStmt->execute($crossSourceVals);
-        if ($altStmt->fetchColumn() !== false) {
-            return 'skipped_cross_source';
+        $altExisting = $altStmt->fetch(PDO::FETCH_ASSOC);
+        if ($altExisting !== false) {
+            // Provenance columns are expected to differ by source (that's
+            // the whole point of the columns) - never a real conflict, and
+            // never worth overwriting the row's existing provenance for.
+            // activity_type_id/activity_name are excluded for a more
+            // specific reason: activity_type_id is a plain find-or-create
+            // keyed on each source's own raw activity code, prefixed
+            // 'HC_'/'API_' - so it's *guaranteed* to differ for the same
+            // real activity across sources (confirmed: 1979/1979 real
+            // cross-source exercise matches hit this). activity_name is the
+            // same problem one level up - each source has its own labeling
+            // convention for the same activity (confirmed real case: HC's
+            // generic title vs. the live API's "Treadmill run"). Both are a
+            // structural gap already tracked separately (no canonical
+            // cross-source activity mapping yet), not a per-instance
+            // disagreement worth flagging as 'mixed' every single time.
+            $neverConflict = ['data_source_id', 'recording_method_id', 'ingestion_source_id', 'activity_type_id', 'activity_name'];
+            $fillable = [];
+            $conflicting = [];
+            foreach ($data as $col => $val) {
+                $old = $altExisting[$col] ?? null;
+                if ($val === null || (string) $val === (string) $old) {
+                    continue;
+                }
+                if (in_array($col, $neverConflict, true)) {
+                    continue;
+                }
+                if ($old === null || $old === '') {
+                    $fillable[$col] = $val;
+                } elseif (is_numeric($val) && is_numeric($old)
+                    && abs((float) $old - (float) $val) <= max(0.0005, 0.01 * max(abs((float) $old), abs((float) $val)))) {
+                    // 1% relative tolerance (floor 0.0005 for near-zero
+                    // values) - covers e.g. weight rounded to the nearest
+                    // 100g by Health Connect vs. the live API's single-gram
+                    // precision (confirmed real delta: up to ~100g out of
+                    // ~100,000g, comfortably under 1%) without masking a
+                    // genuinely different calorie/distance/duration value.
+                    continue;
+                } elseif (looksLikeMysqlDateTime($val) && looksLikeMysqlDateTime($old)
+                    && abs(strtotime($val) - strtotime($old)) <= 300) {
+                    // A session's end_time (unlike its start_time, the
+                    // identity key) can drift by up to ~1 minute between
+                    // sources - stage-boundary rounding, not a real
+                    // disagreement. 5-minute tolerance to be safe.
+                    continue;
+                } else {
+                    $conflicting[$col] = $val;
+                }
+            }
+            if (empty($fillable) && empty($conflicting)) {
+                return 'skipped_cross_source';
+            }
+            $setFields = $fillable + $conflicting;
+            if (!empty($conflicting) && $mixedIngestionSourceId !== null) {
+                $setFields['ingestion_source_id'] = $mixedIngestionSourceId;
+            }
+            $setFields = array_merge($setFields, $provenance);
+            $setSql = implode(', ', array_map(fn($c) => "{$c} = ?", array_keys($setFields)));
+            $pdo->prepare("UPDATE {$table} SET {$setSql} WHERE {$altSql}")
+                ->execute(array_merge(array_values($setFields), $crossSourceVals));
+            return empty($conflicting) ? 'merged_cross_source' : 'merged_conflict';
         }
     }
 
@@ -979,12 +1050,12 @@ function syncNutrition(string $accessToken, PDO $pdo, int $userId, int $ingestio
 // 2. Sleep -> sleep_sessions / sleep_stages
 // ----------------------------------------------------------------------------
 
-function syncSleep(string $accessToken, PDO $pdo, int $userId, int $ingestionSource, array $sleepTypeIds,
+function syncSleep(string $accessToken, PDO $pdo, int $userId, int $ingestionSource, int $mixedIngestionSource, array $sleepTypeIds,
     array $sleepStageTypeIds, array $recordingMethodIds, array &$dataSourceIds, PDOStatement $insertDataSourceStmt, ?DateTimeImmutable $cutoff): void
 {
     logLine("--- Sleep (sleep) ---");
     streamDataPoints($accessToken, 'sleep', 'sleep', $cutoff, function (array $point) use (
-        $pdo, $userId, $ingestionSource, $sleepTypeIds, $sleepStageTypeIds, $recordingMethodIds, &$dataSourceIds, $insertDataSourceStmt
+        $pdo, $userId, $ingestionSource, $mixedIngestionSource, $sleepTypeIds, $sleepStageTypeIds, $recordingMethodIds, &$dataSourceIds, $insertDataSourceStmt
     ) {
         bumpStat('sleep', 'rows_seen', 1);
         $s = $point['sleep'];
@@ -1011,7 +1082,7 @@ function syncSleep(string $accessToken, PDO $pdo, int $userId, int $ingestionSou
                 'ingestion_source_id' => $ingestionSource,
             ],
             provenanceNow($userId),
-            ['user_id', 'start_time'], [$userId, $startTime]
+            ['user_id', 'start_time'], [$userId, $startTime], $mixedIngestionSource
         );
         bumpStat('sleep_sessions', $action, 1);
         debugLog("sleep api_uid={$apiUid} start={$s['interval']['startTime']} end={$s['interval']['endTime']} action={$action}");
@@ -1065,13 +1136,13 @@ function parseSecondsSuffix(?string $value): ?int
     return (int) round(((float) rtrim($value, 's')) * 1000);
 }
 
-function syncExercise(string $accessToken, PDO $pdo, int $userId, int $ingestionSource, int $meterUnitId,
+function syncExercise(string $accessToken, PDO $pdo, int $userId, int $ingestionSource, int $mixedIngestionSource, int $meterUnitId,
     array $recordingMethodIds, array &$dataSourceIds, PDOStatement $insertDataSourceStmt,
     array &$activityTypeIds, PDOStatement $insertActivityTypeStmt, ?DateTimeImmutable $cutoff): void
 {
     logLine("--- Exercise (exercise) ---");
     streamDataPoints($accessToken, 'exercise', 'exercise', $cutoff, function (array $point) use (
-        $pdo, $userId, $ingestionSource, $meterUnitId, $recordingMethodIds, &$dataSourceIds, $insertDataSourceStmt,
+        $pdo, $userId, $ingestionSource, $mixedIngestionSource, $meterUnitId, $recordingMethodIds, &$dataSourceIds, $insertDataSourceStmt,
         &$activityTypeIds, $insertActivityTypeStmt
     ) {
         bumpStat('exercise', 'rows_seen', 1);
@@ -1124,7 +1195,7 @@ function syncExercise(string $accessToken, PDO $pdo, int $userId, int $ingestion
                 'raw_details' => empty($rawDetails) ? null : json_encode($rawDetails),
             ],
             provenanceNow($userId),
-            ['user_id', 'start_time'], [$userId, $startTime]
+            ['user_id', 'start_time'], [$userId, $startTime], $mixedIngestionSource
         );
         bumpStat('exercise', $action, 1);
         debugLog("exercise api_uid={$apiUid} activity=\"" . ($e['displayName'] ?? $e['exerciseType'] ?? '?') . "\" action={$action}");
@@ -1136,12 +1207,12 @@ function syncExercise(string $accessToken, PDO $pdo, int $userId, int $ingestion
 // ----------------------------------------------------------------------------
 
 function syncMeasurement(string $accessToken, PDO $pdo, string $dataType, string $bodyKey, string $valueField,
-    int $userId, int $ingestionSource, int $measurementTypeId, int $unitId, array $recordingMethodIds,
+    int $userId, int $ingestionSource, int $mixedIngestionSource, int $measurementTypeId, int $unitId, array $recordingMethodIds,
     array &$dataSourceIds, PDOStatement $insertDataSourceStmt, ?DateTimeImmutable $cutoff): void
 {
     logLine("--- {$dataType} ({$dataType}) ---");
     streamDataPoints($accessToken, $dataType, $bodyKey, $cutoff, function (array $point) use (
-        $pdo, $bodyKey, $valueField, $userId, $ingestionSource, $measurementTypeId, $unitId,
+        $pdo, $bodyKey, $valueField, $userId, $ingestionSource, $mixedIngestionSource, $measurementTypeId, $unitId,
         $recordingMethodIds, &$dataSourceIds, $insertDataSourceStmt, $dataType
     ) {
         bumpStat($dataType, 'rows_seen', 1);
@@ -1168,7 +1239,7 @@ function syncMeasurement(string $accessToken, PDO $pdo, string $dataType, string
                 'ingestion_source_id' => $ingestionSource,
             ],
             provenanceNow($userId),
-            ['user_id', 'measurement_type_id', 'reading_time'], [$userId, $measurementTypeId, $readingTime]
+            ['user_id', 'measurement_type_id', 'reading_time'], [$userId, $measurementTypeId, $readingTime], $mixedIngestionSource
         );
         bumpStat($dataType, $action, 1);
         debugLog("{$dataType} api_uid={$apiUid} value={$body[$valueField]} action={$action}");
@@ -1303,10 +1374,10 @@ function syncInsertMissingSeries(string $accessToken, PDO $pdo, string $dataType
 // ----------------------------------------------------------------------------
 
 syncNutrition($accessToken, $pdo, $userId, $ingestionSourceApi, $massDimensionId, $gramUnitId, $mealTypeIds, $nutrientIds, $dataSourceIds, $insertDataSource, $cutoff);
-syncSleep($accessToken, $pdo, $userId, $ingestionSourceApi, $sleepTypeIds, $sleepStageTypeIds, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
-syncExercise($accessToken, $pdo, $userId, $ingestionSourceApi, $meterUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $activityTypeIds, $insertActivityType, $cutoff);
-syncMeasurement($accessToken, $pdo, 'weight', 'weight', 'weightGrams', $userId, $ingestionSourceApi, $measurementTypeIds['weight'], $gramUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
-syncMeasurement($accessToken, $pdo, 'height', 'height', 'heightMillimeters', $userId, $ingestionSourceApi, $measurementTypeIds['height'], $mmUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
+syncSleep($accessToken, $pdo, $userId, $ingestionSourceApi, $ingestionSourceMixed, $sleepTypeIds, $sleepStageTypeIds, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
+syncExercise($accessToken, $pdo, $userId, $ingestionSourceApi, $ingestionSourceMixed, $meterUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $activityTypeIds, $insertActivityType, $cutoff);
+syncMeasurement($accessToken, $pdo, 'weight', 'weight', 'weightGrams', $userId, $ingestionSourceApi, $ingestionSourceMixed, $measurementTypeIds['weight'], $gramUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
+syncMeasurement($accessToken, $pdo, 'height', 'height', 'heightMillimeters', $userId, $ingestionSourceApi, $ingestionSourceMixed, $measurementTypeIds['height'], $mmUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
 syncDailyRestingHeartRate($accessToken, $pdo, $userId, $ingestionSourceApi, $recordingMethodIds, $calcMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
 syncInsertMissingSeries($accessToken, $pdo, 'steps', 'steps', 'steps_readings', 'count', 'steps', $userId, $ingestionSourceApi, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
 syncInsertMissingSeries($accessToken, $pdo, 'heart-rate', 'heartRate', 'heart_rate_readings', 'beatsPerMinute', 'bpm', $userId, $ingestionSourceApi, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);

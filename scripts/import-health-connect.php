@@ -672,6 +672,29 @@ logLine("Sleep stages done: {$stageCount} rows processed");
 // 8. Exercise -> exercise_sessions
 // ----------------------------------------------------------------------------
 
+// Health Connect's exercise_type is the numeric android.health.connect.
+// datatypes.ExerciseSessionType constant (e.g. 53), not a name - the
+// importer used to just prefix it ('HC_53'), which is what actually showed
+// up in the UI whenever a session had no title of its own (HC often leaves
+// title null) since the frontend falls back to the activity-type name.
+// Verified each value below against the real platform constant (not
+// guessed - a wrong label would be worse than the honest 'HC_<code>'
+// fallback for codes not yet covered here). Extend as more codes turn up.
+const HC_EXERCISE_TYPE_NAMES = [
+    4 => 'Biking',
+    33 => 'Running',
+    34 => 'Running (Treadmill)',
+    49 => 'Swimming (Pool)',
+    53 => 'Walking',
+    59 => 'Stair Climbing (Machine)',
+    60 => 'Elliptical',
+];
+
+function hcExerciseTypeName(int $code): string
+{
+    return HC_EXERCISE_TYPE_NAMES[$code] ?? ('HC_' . $code);
+}
+
 logLine("--- exercise (exercise_session_record_table) ---");
 $insertExercise = $pdo->prepare(
     "INSERT INTO exercise_sessions (user_id, start_time, end_time, activity_name, activity_type_id, has_gps, data_source_id, recording_method_id, ingestion_source_id, api_uid)
@@ -686,7 +709,7 @@ foreach ($hc->query("SELECT * FROM exercise_session_record_table") as $row) {
         $startTime = hcTimeToMysql((int) $row['start_time']);
         $endTime = hcTimeToMysql((int) $row['end_time']);
         $activityName = $row['title'] ?? null;
-        $activityTypeId = findOrCreateActivityType('HC_' . $row['exercise_type'], $pdo, $activityTypeIds, $insertActivityType);
+        $activityTypeId = findOrCreateActivityType(hcExerciseTypeName((int) $row['exercise_type']), $pdo, $activityTypeIds, $insertActivityType);
         $hasGps = ((int) ($row['has_route'] ?? 0)) === 1;
         $appName = $appNames[(int) $row['app_info_id']] ?? null;
         $dataSourceId = findOrCreateDataSource($appName, $pdo, $dataSourceIds, $insertDataSource);
