@@ -584,7 +584,16 @@ function upsertByNaturalKey(PDO $pdo, string $table, array $whereCols, array $wh
             // structural gap already tracked separately (no canonical
             // cross-source activity mapping yet), not a per-instance
             // disagreement worth flagging as 'mixed' every single time.
-            $neverConflict = ['data_source_id', 'recording_method_id', 'ingestion_source_id', 'activity_type_id', 'activity_name'];
+            // serving_amount/serving_unit_id/meal_type_id (food_log_entries):
+            // the two sources can legitimately express the exact same real
+            // intake in different units (one in "gram", the other in
+            // whatever custom unit its own food_id version already uses),
+            // so a numeric difference here isn't a real disagreement about
+            // what was eaten - and meal_type is a source's own
+            // categorization label, not a fact worth reconciling. Whichever
+            // source's entry already exists keeps its own representation.
+            $neverConflict = ['data_source_id', 'recording_method_id', 'ingestion_source_id', 'activity_type_id', 'activity_name',
+                'serving_amount', 'serving_unit_id', 'meal_type_id'];
             $fillable = [];
             $conflicting = [];
             foreach ($data as $col => $val) {
@@ -684,7 +693,17 @@ const HC_STYLE_NUTRIENT_KEYS = [
     'CHROMIUM', 'VITAMIN_K', 'CAFFEINE', 'FOLATE',
 ];
 
-/** Fetches the referenced `food` resource once (cached per run) and returns its servings, keyed by lowercased unit display name (singular and plural both map to the same entry). */
+/**
+ * Fetches the referenced `food` resource once (cached per run) and returns
+ * its servings, keyed by lowercased unit display name (singular and plural
+ * both map to the same entry) - plus `byUnitRef`, keyed by the
+ * `foodMeasurementUnit` dataPoint reference string itself. Both are needed:
+ * a nutrition-log entry's own `serving.foodMeasurementUnit` is a reference
+ * like "users/me/dataTypes/food-measurement-unit/dataPoints/128", NOT a
+ * display name - `foodMeasurementUnitDisplayName` does not exist anywhere
+ * on a nutrition-log entry (confirmed against real recorded API responses).
+ * `byUnitRef` is what actually resolves that reference to a real name.
+ */
 function fetchFoodServings(string $accessToken, string $foodRef, array &$cache): ?array
 {
     if (array_key_exists($foodRef, $cache)) {
@@ -704,6 +723,7 @@ function fetchFoodServings(string $accessToken, string $foodRef, array &$cache):
 
     $gramMultiplier = null;
     $byUnit = [];
+    $byUnitRef = [];
     foreach ($servings as $s) {
         $mult = $s['multiplier'] ?? null;
         if ($mult === null) {
@@ -713,6 +733,9 @@ function fetchFoodServings(string $accessToken, string $foodRef, array &$cache):
             if (isset($s[$nameField])) {
                 $byUnit[strtolower($s[$nameField])] = (float) $mult;
             }
+        }
+        if (isset($s['foodMeasurementUnit'], $s['foodMeasurementUnitDisplayName'])) {
+            $byUnitRef[$s['foodMeasurementUnit']] = strtolower($s['foodMeasurementUnitDisplayName']);
         }
         if (isset($s['foodMeasurementUnitDisplayName']) && strtolower($s['foodMeasurementUnitDisplayName']) === 'gram') {
             $gramMultiplier = (float) $mult;
@@ -727,6 +750,7 @@ function fetchFoodServings(string $accessToken, string $foodRef, array &$cache):
         'brand' => $decoded['food']['brand'] ?? null,
         'gramMultiplier' => ($gramMultiplier !== null && $gramMultiplier > 0) ? $gramMultiplier : null,
         'byUnit' => $byUnit,
+        'byUnitRef' => $byUnitRef,
     ];
     $cache[$foodRef] = $result;
     return $result;
@@ -745,17 +769,44 @@ function resolveGramsPerUnit(array $foodServings, string $unitLabel): ?float
     return $mult / $foodServings['gramMultiplier'];
 }
 
-/** Same ratio-based fallback import-health-connect.php's findOrCreateFood() uses, for when real grams can't be resolved. */
+/**
+ * A matched food_id's own brand_name is left as-is once set - this only
+ * fills it in the first time real brand data becomes available for a food
+ * that was originally created without one (always true of anything Health
+ * Connect creates). Matches the "use the combined/enhanced version" intent
+ * confirmed directly: loosening the brand match above so a branded and an
+ * unbranded row can match each other is only half the fix - without this,
+ * the surviving row would still permanently show no brand.
+ */
+function enrichBrandIfMissing(PDO $pdo, int $foodId, ?string $existingBrand, ?string $newBrand): void
+{
+    if ($existingBrand === null && $newBrand !== null) {
+        $pdo->prepare("UPDATE foods_db SET brand_name = ? WHERE id = ?")->execute([$newBrand, $foodId]);
+    }
+}
+
+/**
+ * Same ratio-based fallback import-health-connect.php's findOrCreateFood()
+ * uses, for when real grams can't be resolved. Brand match is loose (exact
+ * OR either side NULL) for the same reason findOrCreateFoodReal() is:
+ * Health Connect never captures a brand at all, so its always-NULL-brand
+ * placeholder for a branded product would otherwise never even be
+ * considered as a candidate here - confirmed via a real duplicate pair
+ * ("Vanilla Flavored Whey Protein Powder", one with brand "PREMIER
+ * PROTEIN" from the live API, one without from Health Connect) with
+ * identical macros that a strict brand match kept apart.
+ */
 function findOrCreateFoodFallback(PDO $pdo, int $userId, int $massDimensionId, string $name, ?string $brandName,
     ?float $energyKcal, ?float $proteinG, ?float $carbG, ?float $fatG,
     array $micronutrients, array &$nutrientIds, int $gramUnitId, array &$servingUnitCache): array
 {
     $existing = $pdo->prepare(
-        "SELECT id, version, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g
-         FROM foods_db WHERE name = ? AND brand_name <=> ? AND dimension_id = ? AND user_id = ?
+        "SELECT id, version, brand_name, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g
+         FROM foods_db WHERE name = ? AND (brand_name <=> ? OR brand_name IS NULL OR ? IS NULL)
+         AND dimension_id = ? AND user_id = ?
          ORDER BY COALESCE(version, 0) DESC"
     );
-    $existing->execute([$name, $brandName, $massDimensionId, $userId]);
+    $existing->execute([$name, $brandName, $brandName, $massDimensionId, $userId]);
     $candidates = $existing->fetchAll(PDO::FETCH_ASSOC);
 
     $impliedRatio = function (?float $incoming, ?float $baseline): ?float {
@@ -787,6 +838,7 @@ function findOrCreateFoodFallback(PDO $pdo, int $userId, int $massDimensionId, s
         }
         if ($consistent) {
             $foodId = (int) $row['id'];
+            enrichBrandIfMissing($pdo, $foodId, $row['brand_name'], $brandName);
             $servingUnitId = $servingUnitCache[$foodId] ?? null;
             if ($servingUnitId === null) {
                 // Matched a food created by a previous run (or by the
@@ -882,12 +934,26 @@ function findOrCreateFoodReal(PDO $pdo, int $userId, int $massDimensionId, strin
         $microPer100[$n] = $v / $gramsForEntry * 100;
     }
 
+    // Brand match is deliberately loose (exact match OR either side is
+    // NULL), not brand_name <=> $brandName: Health Connect never captures a
+    // brand at all (structural limitation, confirmed - its nutrition table
+    // has no such column), so a Health-Connect-created placeholder for a
+    // branded product always has brand_name NULL. Requiring an exact match
+    // here would mean a live-API entry that *does* know the real brand
+    // (e.g. "Vanilla Flavored Whey Protein Powder (PREMIER PROTEIN)") could
+    // never even see the matching Health Connect placeholder as a candidate
+    // to reconcile with, even when every macro matches exactly - confirmed
+    // via a real duplicate pair with identical macros. A real, differently-
+    // branded product still has to pass the 5%/15% macro-consistency checks
+    // below to actually match, so this alone doesn't risk conflating two
+    // genuinely different branded products.
     $existing = $pdo->prepare(
-        "SELECT id, version, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g
-         FROM foods_db WHERE name = ? AND brand_name <=> ? AND dimension_id = ? AND user_id = ?
+        "SELECT id, version, brand_name, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g
+         FROM foods_db WHERE name = ? AND (brand_name <=> ? OR brand_name IS NULL OR ? IS NULL)
+         AND dimension_id = ? AND user_id = ?
          ORDER BY COALESCE(version, 0) DESC"
     );
-    $existing->execute([$name, $brandName, $massDimensionId, $userId]);
+    $existing->execute([$name, $brandName, $brandName, $massDimensionId, $userId]);
     $candidates = $existing->fetchAll(PDO::FETCH_ASSOC);
 
     $closeEnough = function (?float $a, ?float $b): bool {
@@ -909,7 +975,66 @@ function findOrCreateFoodReal(PDO $pdo, int $userId, int $massDimensionId, strin
             && $closeEnough($carbPer100, $row['total_carbohydrate_g'] !== null ? (float) $row['total_carbohydrate_g'] : null)
             && $closeEnough($fatPer100, $row['total_fat_g'] !== null ? (float) $row['total_fat_g'] : null)) {
             $foodId = (int) $row['id'];
+            enrichBrandIfMissing($pdo, $foodId, $row['brand_name'], $brandName);
             break;
+        }
+    }
+
+    // No real-gram match - check whether any candidate is instead an
+    // uncorrected placeholder ("reported serving") version of this same
+    // food. Placeholder rows store the RAW absolute macros of whatever was
+    // originally reported (not per-100g), so they can't be compared with
+    // $closeEnough above; instead check whether a single ratio explains the
+    // placeholder's raw values as (this entry's real per-100g) x ratio,
+    // consistently across macros - the same 15%-of-median consistency test
+    // findOrCreateFoodFallback() already uses. A consistent ratio means the
+    // placeholder's "1 reported serving" really represents (ratio x 100)
+    // real grams of this exact food - now knowable for the first time.
+    $placeholderFoodId = null;
+    $impliedGramsForBaseline = null;
+    if ($foodId === null && !empty($candidates)) {
+        $candidateIds = array_map(fn($r) => (int) $r['id'], $candidates);
+        $placeholders = $pdo->prepare(
+            "SELECT food_id FROM foods_db_custom_units WHERE unit_name = 'reported serving' AND food_id IN ("
+            . implode(',', array_fill(0, count($candidateIds), '?')) . ")"
+        );
+        $placeholders->execute($candidateIds);
+        $placeholderIds = array_flip(array_map('intval', $placeholders->fetchAll(PDO::FETCH_COLUMN)));
+
+        $impliedRatio = function (?float $rawCandidate, ?float $per100Entry): ?float {
+            if ($rawCandidate === null || $per100Entry === null || abs($per100Entry) < 0.001) {
+                return null;
+            }
+            return $rawCandidate / $per100Entry;
+        };
+
+        foreach ($candidates as $row) {
+            if (!isset($placeholderIds[(int) $row['id']])) {
+                continue;
+            }
+            $ratios = array_filter([
+                $impliedRatio($row['energy_kcal'] !== null ? (float) $row['energy_kcal'] : null, $energyPer100),
+                $impliedRatio($row['total_protein_g'] !== null ? (float) $row['total_protein_g'] : null, $proteinPer100),
+                $impliedRatio($row['total_carbohydrate_g'] !== null ? (float) $row['total_carbohydrate_g'] : null, $carbPer100),
+                $impliedRatio($row['total_fat_g'] !== null ? (float) $row['total_fat_g'] : null, $fatPer100),
+            ], fn($r) => $r !== null && $r > 0);
+            if (count($ratios) === 0) {
+                continue;
+            }
+            sort($ratios);
+            $median = $ratios[intdiv(count($ratios), 2)];
+            $consistent = true;
+            foreach ($ratios as $r) {
+                if (abs($r - $median) > $median * 0.15) {
+                    $consistent = false;
+                    break;
+                }
+            }
+            if ($consistent) {
+                $placeholderFoodId = (int) $row['id'];
+                $impliedGramsForBaseline = $median * 100;
+                break;
+            }
         }
     }
 
@@ -929,10 +1054,47 @@ function findOrCreateFoodReal(PDO $pdo, int $userId, int $massDimensionId, strin
     $unitNameKey = strtolower(trim($unitLabel)) ?: 'unit';
     $servingUnitId = getOrCreateCustomUnit($pdo, $foodId, $unitNameKey, $gramsPerUnit, "api_{$foodId}_{$unitNameKey}", $isNew);
 
+    if ($placeholderFoodId !== null) {
+        reconcilePlaceholderIntoReal($pdo, $placeholderFoodId, $foodId, $impliedGramsForBaseline);
+    }
+
     return [$foodId, $isNew, $servingAmount, $servingUnitId];
 }
 
-function syncNutrition(string $accessToken, PDO $pdo, int $userId, int $ingestionSource, int $massDimensionId, int $gramUnitId,
+/**
+ * Migrates every food_log_entries row still pointing at a now-confirmed
+ * placeholder ("reported serving") food onto its real-gram counterpart,
+ * re-expressing serving_amount in real grams so the displayed total is
+ * unchanged (serving_amount x equivalent_amount / 100, same formula
+ * public/api/food-log.php already uses - verified by hand against it):
+ * a placeholder entry's implied real grams = its old serving_amount x
+ * $impliedGramsForBaseline (the real gram weight $placeholderFoodId's own
+ * "1 reported serving" baseline turned out to represent). The placeholder
+ * foods_db row itself is left in place, permanently unreferenced - it can't
+ * be deleted (trg_foods_db_bd forbids it, like every table in this schema)
+ * and doesn't need to be once nothing points at it any more.
+ */
+function reconcilePlaceholderIntoReal(PDO $pdo, int $placeholderFoodId, int $canonicalFoodId, float $impliedGramsForBaseline): void
+{
+    $gramUnitId = getOrCreateCustomUnit($pdo, $canonicalFoodId, 'gram', 1.0, "api_{$canonicalFoodId}_gram", false);
+
+    $findEntries = $pdo->prepare("SELECT id, serving_amount FROM food_log_entries WHERE food_id = ?");
+    $findEntries->execute([$placeholderFoodId]);
+    $entries = $findEntries->fetchAll(PDO::FETCH_ASSOC);
+    if (empty($entries)) {
+        return;
+    }
+
+    $update = $pdo->prepare("UPDATE food_log_entries SET food_id = ?, serving_amount = ?, serving_unit_id = ? WHERE id = ?");
+    foreach ($entries as $entry) {
+        $realGrams = round((float) $entry['serving_amount'] * $impliedGramsForBaseline, 4);
+        $update->execute([$canonicalFoodId, $realGrams, $gramUnitId, $entry['id']]);
+    }
+    logLine("Reconciled placeholder food_id={$placeholderFoodId} into real-gram food_id={$canonicalFoodId}: "
+        . count($entries) . " food_log_entries migrated (implied {$impliedGramsForBaseline}g per original reported serving)");
+}
+
+function syncNutrition(string $accessToken, PDO $pdo, int $userId, int $ingestionSource, int $mixedIngestionSource, int $massDimensionId, int $gramUnitId,
     array $mealTypeIds, array &$nutrientIds, array &$dataSourceIds, PDOStatement $insertDataSourceStmt, ?DateTimeImmutable $cutoff): void
 {
     logLine("--- Nutrition (nutrition-log) ---");
@@ -940,7 +1102,7 @@ function syncNutrition(string $accessToken, PDO $pdo, int $userId, int $ingestio
     $fallbackServingUnitCache = [];
 
     streamDataPoints($accessToken, 'nutrition-log', 'nutritionLog', $cutoff, function (array $point) use (
-        $accessToken, $pdo, $userId, $ingestionSource, $massDimensionId, $gramUnitId, $mealTypeIds,
+        $accessToken, $pdo, $userId, $ingestionSource, $mixedIngestionSource, $massDimensionId, $gramUnitId, $mealTypeIds,
         &$nutrientIds, &$dataSourceIds, $insertDataSourceStmt, &$foodResourceCache, &$fallbackServingUnitCache
     ) {
         bumpStat('nutrition', 'rows_seen', 1);
@@ -976,7 +1138,18 @@ function syncNutrition(string $accessToken, PDO $pdo, int $userId, int $ingestio
         }
 
         $servingAmount = isset($nl['serving']['amount']) ? (float) $nl['serving']['amount'] : 1.0;
-        $unitLabel = $nl['serving']['foodMeasurementUnitDisplayName'] ?? 'serving';
+        // NOT a display name - nutrition-log entries only carry a
+        // food-measurement-unit dataPoint *reference* here (confirmed
+        // against real recorded API responses: this entry never has a
+        // foodMeasurementUnitDisplayName field at all). Resolved below via
+        // the food resource's own byUnitRef map, once $servings is fetched -
+        // the literal 'serving' fallback was silently used for every entry
+        // before this fix, corrupting gram conversion for anything not
+        // actually reported in the food's own generic "serving" unit
+        // (confirmed real case: 3 fl oz of milk treated as 3 whole
+        // "servings", 240g each instead of 30.71g each - an 8x error).
+        $unitRef = $nl['serving']['foodMeasurementUnit'] ?? null;
+        $unitLabel = 'serving';
         $foodRef = $nl['food'] ?? null;
 
         // Fetched whenever a food reference exists, regardless of whether
@@ -990,6 +1163,9 @@ function syncNutrition(string $accessToken, PDO $pdo, int $userId, int $ingestio
             $servings = fetchFoodServings($accessToken, $foodRef, $foodResourceCache);
             if ($servings !== null) {
                 $brandName = $servings['brand'];
+                if ($unitRef !== null && isset($servings['byUnitRef'][$unitRef])) {
+                    $unitLabel = $servings['byUnitRef'][$unitRef];
+                }
                 if ($servingAmount > 0) {
                     $gramsPerUnit = resolveGramsPerUnit($servings, $unitLabel);
                     if ($gramsPerUnit !== null) {
@@ -1022,11 +1198,20 @@ function syncNutrition(string $accessToken, PDO $pdo, int $userId, int $ingestio
             return;
         }
         $dataSourceId = findOrCreateDataSource(dataSourceLabel($point), $pdo, $dataSourceIds, $insertDataSourceStmt);
+        $startTime = toMysqlDateTime($nl['interval']['startTime']);
 
+        // Cross-source check on (user_id, start_time, food_id) - only
+        // reliable now that findOrCreateFoodReal()/findOrCreateFoodFallback()
+        // reconcile placeholder and real-gram versions of the same food onto
+        // one food_id (see those functions). Before that fix, the same real
+        // meal routinely resolved to two different food_id values across
+        // sources, so this key would have missed almost every real
+        // duplicate - confirmed directly (13,094 same-timestamp cross-source
+        // pairs, only 122 sharing a food_id, pre-fix).
         $action = upsertByNaturalKey(
             $pdo, 'food_log_entries', ['user_id', 'api_uid'], [$userId, $apiUid],
             [
-                'start_time' => toMysqlDateTime($nl['interval']['startTime']),
+                'start_time' => $startTime,
                 'end_time' => toMysqlDateTime($nl['interval']['endTime']),
                 'meal_type_id' => $mealTypeId,
                 'food_id' => $foodId,
@@ -1035,7 +1220,8 @@ function syncNutrition(string $accessToken, PDO $pdo, int $userId, int $ingestio
                 'data_source_id' => $dataSourceId,
                 'ingestion_source_id' => $ingestionSource,
             ],
-            provenanceNow($userId)
+            provenanceNow($userId),
+            ['user_id', 'start_time', 'food_id'], [$userId, $startTime, $foodId], $mixedIngestionSource
         );
         bumpStat('nutrition', $action, 1);
         debugLog("nutrition api_uid={$apiUid} name=\"{$name}\"" . ($brandName !== null ? " brand=\"{$brandName}\"" : '')
@@ -1373,7 +1559,7 @@ function syncInsertMissingSeries(string $accessToken, PDO $pdo, string $dataType
 // Run
 // ----------------------------------------------------------------------------
 
-syncNutrition($accessToken, $pdo, $userId, $ingestionSourceApi, $massDimensionId, $gramUnitId, $mealTypeIds, $nutrientIds, $dataSourceIds, $insertDataSource, $cutoff);
+syncNutrition($accessToken, $pdo, $userId, $ingestionSourceApi, $ingestionSourceMixed, $massDimensionId, $gramUnitId, $mealTypeIds, $nutrientIds, $dataSourceIds, $insertDataSource, $cutoff);
 syncSleep($accessToken, $pdo, $userId, $ingestionSourceApi, $ingestionSourceMixed, $sleepTypeIds, $sleepStageTypeIds, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
 syncExercise($accessToken, $pdo, $userId, $ingestionSourceApi, $ingestionSourceMixed, $meterUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $activityTypeIds, $insertActivityType, $cutoff);
 syncMeasurement($accessToken, $pdo, 'weight', 'weight', 'weightGrams', $userId, $ingestionSourceApi, $ingestionSourceMixed, $measurementTypeIds['weight'], $gramUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);

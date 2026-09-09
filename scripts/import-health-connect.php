@@ -229,9 +229,19 @@ function findOrCreateFood(PDO $pdo, int $userId, int $massDimensionId, string $n
     ?float $energyKcal, ?float $proteinG, ?float $carbG, ?float $fatG,
     array $micronutrients, array &$nutrientIds, int $gramUnitId, array &$servingUnitCache): array
 {
+    // No brand_name filter: Health Connect never captures a brand at all
+    // (structural limitation, confirmed - its nutrition table has no such
+    // column), so this must be able to match into an ALREADY-branded
+    // real-gram or fallback row a live-API sync created for the same food -
+    // confirmed via a real duplicate pair ("Vanilla Flavored Whey Protein
+    // Powder", one branded "PREMIER PROTEIN" from the API, one unbranded
+    // from Health Connect) with identical macros that filtering on
+    // "brand_name IS NULL" kept apart. The ratio-consistency check below is
+    // what actually guards against conflating two real, different foods
+    // that happen to share a name.
     $existing = $pdo->prepare(
         "SELECT id, version, energy_kcal, total_protein_g, total_carbohydrate_g, total_fat_g
-         FROM foods_db WHERE name = ? AND brand_name IS NULL AND dimension_id = ? AND user_id = ?
+         FROM foods_db WHERE name = ? AND dimension_id = ? AND user_id = ?
          ORDER BY COALESCE(version, 0) DESC"
     );
     $existing->execute([$name, $massDimensionId, $userId]);
