@@ -1125,6 +1125,15 @@ CREATE TABLE measurements (
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
     UNIQUE KEY uq_measurements_api_uid (user_id, measurement_type_id, api_uid),
+    -- Cross-source duplicate guard: Health Connect and the live API each
+    -- assign their own api_uid to the same real reading, so the key above
+    -- (real and working per-source) can't catch the same weight/height
+    -- value logged by both. Confirmed via real data: 513 of 521 HC weight
+    -- readings match a live-API row on this exact triple, even though the
+    -- two sources sometimes round the value slightly differently (HC to
+    -- the nearest 100g, the live API to the gram) - so value is
+    -- deliberately NOT part of this key.
+    UNIQUE KEY uq_measurements_reading (user_id, measurement_type_id, reading_time),
     KEY idx_measurements_time (user_id, measurement_type_id, reading_time),
     CONSTRAINT fk_measurements_user FOREIGN KEY (user_id) REFERENCES users(id),
     CONSTRAINT fk_measurements_type FOREIGN KEY (measurement_type_id) REFERENCES lut_measurement_type(id),
@@ -1202,6 +1211,13 @@ CREATE TABLE exercise_sessions (
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
     UNIQUE KEY uq_exercise_sessions_api_uid (user_id, api_uid),
+    -- Cross-source duplicate guard, same reasoning as measurements above.
+    -- Confirmed via real data: 1980 of 2015 HC exercise sessions match a
+    -- live-API session on start_time alone, with end_time also matching
+    -- exactly in every sampled case (unlike sleep, where end_time can drift
+    -- by up to ~1 minute between sources) - start_time alone is still the
+    -- safer key, since it's the one guaranteed to align.
+    UNIQUE KEY uq_exercise_sessions_start (user_id, start_time),
     KEY idx_exercise_sessions_start_time (user_id, start_time),
     CONSTRAINT fk_exercise_sessions_user FOREIGN KEY (user_id) REFERENCES users(id),
     CONSTRAINT fk_exercise_sessions_activity_type FOREIGN KEY (activity_type_id) REFERENCES lut_activity_type(id),
@@ -1255,8 +1271,10 @@ CREATE TABLE nutripal_hist.exercise_sessions_hist (
 -- per zone).
 --
 -- No `fingerprint` (dropped everywhere) and no `sleep_id` (Takeout-specific
--- native ID, now unused) — api_uid (HC's uuid or the API's native id) is the
--- sole identity mechanism.
+-- native ID, now unused) — api_uid (HC's uuid or the API's native id) is a
+-- real per-source identity, but Health Connect and the live API assign
+-- different ids to the same real sleep session, so it can't catch a
+-- cross-source duplicate on its own — see uq_sleep_sessions_start below.
 CREATE TABLE sleep_sessions (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT UNSIGNED NOT NULL,
@@ -1273,6 +1291,12 @@ CREATE TABLE sleep_sessions (
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
     UNIQUE KEY uq_sleep_sessions_api_uid (user_id, api_uid),
+    -- Cross-source duplicate guard, same reasoning as measurements/exercise
+    -- above. Confirmed via real data: 660 of 710 HC sleep sessions match a
+    -- live-API session on start_time alone; end_time can drift by up to
+    -- ~1 minute between sources (stage-boundary rounding differences), so
+    -- only start_time — which matches exactly every time — is safe to key on.
+    UNIQUE KEY uq_sleep_sessions_start (user_id, start_time),
     KEY idx_sleep_sessions_start_time (user_id, start_time),
     CONSTRAINT fk_sleep_sessions_user FOREIGN KEY (user_id) REFERENCES users(id),
     CONSTRAINT fk_sleep_sessions_type FOREIGN KEY (sleep_type_id) REFERENCES lut_sleep_type(id),

@@ -569,8 +569,13 @@ $insertSleepSession = $pdo->prepare(
     "INSERT INTO sleep_sessions (user_id, start_time, end_time, data_source_id, recording_method_id, ingestion_source_id, api_uid)
      VALUES (?, ?, ?, ?, ?, ?, ?)"
 );
-$findSleepSessionByApiUid = $pdo->prepare(
-    "SELECT id FROM sleep_sessions WHERE user_id = ? AND api_uid = ?"
+// Looked up by (user_id, start_time), not api_uid: a duplicate-key hit can
+// now come from either uq_sleep_sessions_api_uid (same-source re-import) or
+// uq_sleep_sessions_start (a live-API sync already recorded this same real
+// session under its own, different api_uid) - start_time is the one thing
+// guaranteed to match the actual colliding row in both cases.
+$findSleepSessionByStartTime = $pdo->prepare(
+    "SELECT id FROM sleep_sessions WHERE user_id = ? AND start_time = ?"
 );
 $sleepRowIdToId = [];
 $sessionCount = 0;
@@ -594,8 +599,8 @@ foreach ($hc->query("SELECT * FROM sleep_session_record_table") as $row) {
                 // its stages remain reachable below — without this, a
                 // re-import silently drops every stage for every session it
                 // has already seen (real bug, found via a real re-import).
-                $findSleepSessionByApiUid->execute([$userId, $apiUid]);
-                $existingId = $findSleepSessionByApiUid->fetchColumn();
+                $findSleepSessionByStartTime->execute([$userId, $startTime]);
+                $existingId = $findSleepSessionByStartTime->fetchColumn();
                 if ($existingId !== false) {
                     $sleepRowIdToId[(int) $row['row_id']] = (int) $existingId;
                 }

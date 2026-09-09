@@ -531,13 +531,35 @@ function streamDataPoints(string $accessToken, string $dataType, string $bodyKey
  * unchanged data don't spam the history trigger with no-op snapshots.
  * $provenance (changed_by/changed_by_user_id/db_ts) is stamped only when a
  * real update happens.
+ *
+ * $crossSourceCols/$crossSourceVals (optional): a second identity check for
+ * tables where Health Connect and the live API assign different api_uids to
+ * the same real-world event (sleep/exercise sessions, measurements) - if the
+ * primary (user_id, api_uid) lookup misses but this alternate lookup (e.g.
+ * user_id + start_time) hits, the row already exists under the other
+ * source's api_uid. Skip rather than insert (would duplicate) or update
+ * (would overwrite that source's provenance/data_source_id with this run's,
+ * and - for measurements specifically - its slightly different rounding,
+ * for no real benefit): whichever source recorded it first stays
+ * authoritative. Confirmed via real data this only misses a small minority
+ * of cross-source pairs (device-only sessions the other source never saw).
  */
-function upsertByNaturalKey(PDO $pdo, string $table, array $whereCols, array $whereVals, array $data, array $provenance): string
+function upsertByNaturalKey(PDO $pdo, string $table, array $whereCols, array $whereVals, array $data, array $provenance,
+    ?array $crossSourceCols = null, ?array $crossSourceVals = null): string
 {
     $whereSql = implode(' AND ', array_map(fn($c) => "{$c} = ?", $whereCols));
     $stmt = $pdo->prepare("SELECT * FROM {$table} WHERE {$whereSql}");
     $stmt->execute($whereVals);
     $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($existing === false && $crossSourceCols !== null) {
+        $altSql = implode(' AND ', array_map(fn($c) => "{$c} = ?", $crossSourceCols));
+        $altStmt = $pdo->prepare("SELECT 1 FROM {$table} WHERE {$altSql}");
+        $altStmt->execute($crossSourceVals);
+        if ($altStmt->fetchColumn() !== false) {
+            return 'skipped_cross_source';
+        }
+    }
 
     if ($existing === false) {
         $cols = array_merge($whereCols, array_keys($data));
@@ -975,39 +997,42 @@ function syncSleep(string $accessToken, PDO $pdo, int $userId, int $ingestionSou
         $sleepTypeId = $sleepTypeIds[$s['type'] ?? ''] ?? null;
         $recordingMethodId = $recordingMethodIds[$point['dataSource']['recordingMethod'] ?? ''] ?? null;
         $dataSourceId = findOrCreateDataSource(dataSourceLabel($point), $pdo, $dataSourceIds, $insertDataSourceStmt);
+        $startTime = toMysqlDateTime($s['interval']['startTime']);
 
         $action = upsertByNaturalKey(
             $pdo, 'sleep_sessions', ['user_id', 'api_uid'], [$userId, $apiUid],
             [
                 'sleep_type_id' => $sleepTypeId,
                 'main_sleep' => isset($s['mainSleep']) ? ($s['mainSleep'] ? 1 : 0) : null,
-                'start_time' => toMysqlDateTime($s['interval']['startTime']),
+                'start_time' => $startTime,
                 'end_time' => toMysqlDateTime($s['interval']['endTime']),
                 'data_source_id' => $dataSourceId,
                 'recording_method_id' => $recordingMethodId,
                 'ingestion_source_id' => $ingestionSource,
             ],
-            provenanceNow($userId)
+            provenanceNow($userId),
+            ['user_id', 'start_time'], [$userId, $startTime]
         );
         bumpStat('sleep_sessions', $action, 1);
         debugLog("sleep api_uid={$apiUid} start={$s['interval']['startTime']} end={$s['interval']['endTime']} action={$action}");
 
-        $findSession = $pdo->prepare("SELECT id FROM sleep_sessions WHERE user_id = ? AND api_uid = ?");
-        $findSession->execute([$userId, $apiUid]);
+        // By start_time, not api_uid: a cross-source skip means the actual
+        // row belongs to Health Connect under its own uuid, not this one.
+        $findSession = $pdo->prepare("SELECT id FROM sleep_sessions WHERE user_id = ? AND start_time = ?");
+        $findSession->execute([$userId, $startTime]);
         $sessionId = (int) $findSession->fetchColumn();
         if ($sessionId === 0) {
             return;
         }
 
-        $existingStages = $pdo->prepare("SELECT start_time, end_time FROM sleep_stages WHERE sleep_session_id = ?");
-        $existingStages->execute([$sessionId]);
-        $seen = [];
-        foreach ($existingStages as $row) {
-            $seen[$row['start_time'] . '|' . $row['end_time']] = true;
-        }
-
+        // IGNORE, not a plain INSERT: uq_sleep_stages_natural is keyed on
+        // (session, stage_type, start_time) - not end_time - so a stage
+        // whose end_time drifts slightly between sources (the same rounding
+        // difference already seen on the parent session) would slip past an
+        // in-memory (start_time, end_time) check and crash on the real
+        // constraint. Found via a real cross-source sleep sync.
         $insertStage = $pdo->prepare(
-            "INSERT INTO sleep_stages (user_id, sleep_session_id, stage_type_id, start_time, end_time, ingestion_source_id)
+            "INSERT IGNORE INTO sleep_stages (user_id, sleep_session_id, stage_type_id, start_time, end_time, ingestion_source_id)
              VALUES (?, ?, ?, ?, ?, ?)"
         );
         foreach ($s['stages'] ?? [] as $stage) {
@@ -1021,12 +1046,8 @@ function syncSleep(string $accessToken, PDO $pdo, int $userId, int $ingestionSou
             }
             $startTime = toMysqlDateTime($stage['startTime']);
             $endTime = toMysqlDateTime($stage['endTime']);
-            if (isset($seen[$startTime . '|' . $endTime])) {
-                bumpStat('sleep_stages', 'skipped_duplicate', 1);
-                continue;
-            }
             $insertStage->execute([$userId, $sessionId, $stageTypeId, $startTime, $endTime, $ingestionSource]);
-            bumpStat('sleep_stages', 'inserted', 1);
+            bumpStat('sleep_stages', $insertStage->rowCount() > 0 ? 'inserted' : 'skipped_duplicate', 1);
         }
         debugLog("sleep_stages session_id={$sessionId} stages_seen=" . count($s['stages'] ?? []));
     });
@@ -1102,7 +1123,8 @@ function syncExercise(string $accessToken, PDO $pdo, int $userId, int $ingestion
                 'ingestion_source_id' => $ingestionSource,
                 'raw_details' => empty($rawDetails) ? null : json_encode($rawDetails),
             ],
-            provenanceNow($userId)
+            provenanceNow($userId),
+            ['user_id', 'start_time'], [$userId, $startTime]
         );
         bumpStat('exercise', $action, 1);
         debugLog("exercise api_uid={$apiUid} activity=\"" . ($e['displayName'] ?? $e['exerciseType'] ?? '?') . "\" action={$action}");
@@ -1133,17 +1155,20 @@ function syncMeasurement(string $accessToken, PDO $pdo, string $dataType, string
         $dataSourceId = findOrCreateDataSource(dataSourceLabel($point), $pdo, $dataSourceIds, $insertDataSourceStmt);
         $recordingMethodId = $recordingMethodIds[$point['dataSource']['recordingMethod'] ?? ''] ?? null;
 
+        $readingTime = toMysqlDateTime($body['sampleTime']['physicalTime']);
+
         $action = upsertByNaturalKey(
             $pdo, 'measurements', ['user_id', 'measurement_type_id', 'api_uid'], [$userId, $measurementTypeId, $apiUid],
             [
-                'reading_time' => toMysqlDateTime($body['sampleTime']['physicalTime']),
+                'reading_time' => $readingTime,
                 'value' => (float) $body[$valueField],
                 'unit_id' => $unitId,
                 'data_source_id' => $dataSourceId,
                 'recording_method_id' => $recordingMethodId,
                 'ingestion_source_id' => $ingestionSource,
             ],
-            provenanceNow($userId)
+            provenanceNow($userId),
+            ['user_id', 'measurement_type_id', 'reading_time'], [$userId, $measurementTypeId, $readingTime]
         );
         bumpStat($dataType, $action, 1);
         debugLog("{$dataType} api_uid={$apiUid} value={$body[$valueField]} action={$action}");
