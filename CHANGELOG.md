@@ -1,5 +1,11 @@
 # Changelog
 
+## V0.1.10 — 2026-09-09 22:15
+### Changes
+- **Fixed unclear/technical serving-unit labels in the food log UI.** Reported directly from the real UI: entries showed things like "2.84 api_951_gram" or "1 hc_reported_serving_266" instead of a readable quantity. Root cause: `public/api/food-log.php` selected `lut_serving_unit.label` for display — that column is an internal technical key (embeds the food id and source prefix) never meant to be shown to a user; the real human-readable name was already stored elsewhere (`unit_conversions.name` for standard units, `foods_db_custom_units.unit_name` for per-food custom ones) but wasn't being selected.
+- Changed the query to select `COALESCE(uc.name, fdcu.unit_name) AS serving_unit_label` instead. No frontend change needed — `FoodLog.jsx` already just renders `serving_amount` + `serving_unit_label` as given.
+- Verified in the real UI on 2026-08-28: entries now read "2.84 gram", "1 reported serving", "300.06 gram", etc. — a clear unit name paired with the existing quantity, instead of the raw technical label.
+
 ## V0.1.9 — 2026-09-09 21:45
 ### Changes
 - **Fixed `food_log_entries` cross-source duplication** — the last of the four cross-source categories left open after V0.1.6/V0.1.7. Unlike sleep/exercise/measurements, the same real meal logged by both sources routinely resolved to *two different `food_id`s*, not just two rows with the same timestamp, so a plain natural-key dedup couldn't fix it.

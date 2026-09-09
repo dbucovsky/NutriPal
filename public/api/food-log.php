@@ -31,7 +31,13 @@ try {
 
 $pdo = Database::connect();
 $stmt = $pdo->prepare(
-    "SELECT fle.id, fd.name, fd.brand_name, fle.serving_amount, lsu.label AS serving_unit_label,
+    // lsu.label is an internal technical key (e.g. "api_951_gram",
+    // "hc_reported_serving_266") - never meant for display. The real
+    // human-readable unit name is unit_conversions.name for a standard
+    // unit ("gram") or foods_db_custom_units.unit_name for a per-food
+    // custom one ("fl oz", "scoop", "reported serving").
+    "SELECT fle.id, fd.name, fd.brand_name, fle.serving_amount,
+            COALESCE(uc.name, fdcu.unit_name) AS serving_unit_label,
             mt.name AS meal_type,
             COALESCE(uc.factor_to_base, fdcu.equivalent_amount) AS unit_amount,
             fd.energy_kcal, fd.total_protein_g, fd.total_carbohydrate_g, fd.total_fat_g
