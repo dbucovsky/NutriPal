@@ -367,6 +367,49 @@
   margin-left: 12px;
 }
 
+/* Food tab's own group headers (FoodTree.jsx) - unlike MultiDay's
+   plain-label group-section-header, these also carry an average+links
+   macro row, so (same reasoning as day/meal headers) they need a flex
+   layout, which loses the native triangle, restored by hand. */
+.food-group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  cursor: pointer;
+  padding: 6px 0 6px 6px;
+  font-weight: 600;
+}
+
+.year-section > .food-group-header {
+  font-size: 1.3rem;
+}
+
+.quarter-section > .food-group-header {
+  font-size: 1.15rem;
+}
+
+.month-section > .food-group-header {
+  font-size: 1.1rem;
+}
+
+.week-section > .food-group-header {
+  font-size: 1rem;
+}
+
+.food-group-title::before {
+  content: '▶';
+  display: inline-block;
+  font-size: 0.7em;
+  margin-right: 6px;
+  transition: transform 0.1s ease;
+}
+
+details[open] > .food-group-header .food-group-title::before {
+  transform: rotate(90deg);
+}
+
 .meal-section {
   margin-bottom: 20px;
 }
@@ -439,18 +482,22 @@
   font-size: 0.85rem;
 }
 
+/* Reused as the single-day "totals above the meals" header line (Food
+   tab) - a border-bottom separating it from the meals that follow, not a
+   border-top/footer separator like its original use. */
 .daily-totals {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 2px solid var(--border);
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid var(--border);
 }
 
-/* Tabular macro grid - kcal-value | "P" | value | "C" | value | "F" | value.
-   Fixed column widths (not content width) is what makes digits line up
-   across different rows/days regardless of label text length. */
+/* Tabular macro grid - kcal-value | "Prot" | value | "Carb" | value |
+   "Fat" | value. Fixed column widths (not content width) is what makes
+   digits line up across different rows/days regardless of label text
+   length. */
 .macro-grid {
   display: inline-grid;
-  grid-template-columns: 86px 12px 56px 12px 56px 12px 56px;
+  grid-template-columns: 86px 32px 56px 32px 56px 30px 56px;
   column-gap: 2px;
   font-variant-numeric: tabular-nums;
   vertical-align: middle;
@@ -487,6 +534,70 @@ button.macro-cell-value {
 button.macro-cell-clickable:hover {
   color: var(--accent);
   text-decoration: underline;
+}
+
+/* Macro warning colors - meal/day/week/month/quarter/year summary lines
+   only, never individual food entries (too noisy at that granularity).
+   Bold weight too, so the color reads clearly even for colorblind users
+   relying on the text itself rather than the hue alone. */
+.macro-cell-value.warn-yellow {
+  color: #b8860b;
+  font-weight: 700;
+}
+
+.macro-cell-value.warn-red {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.macro-cell-value.warn-green {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Food toolbar */
+
+.food-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbar-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 2px 4px;
+}
+
+.toolbar-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.toolbar-badge:hover:not(:disabled) {
+  background: var(--border);
+}
+
+.toolbar-badge:disabled {
+  color: var(--text-muted);
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* Heart rate */

@@ -86,8 +86,8 @@ function App() {
     <div className="app">
       <header className="app-header">
         <div className="header-left">
-          <QuickSyncButton />
           <MenuDropdown onSelect={setOpenPanel} onLogout={handleLogout} />
+          <QuickSyncButton />
         </div>
         <span>Logged in as {currentUser.name}</span>
       </header>

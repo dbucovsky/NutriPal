@@ -1,5 +1,25 @@
 # Changelog
 
+## V0.8.0 — 2026-09-10 05:30
+### Changes
+- Swapped the top-ribbon order: the menu button now comes first, with the quick-sync icon to its right.
+- Reordered the menu's own items to Sync, Settings, Log out, Help, About.
+- **Food tab overhaul**, forking a dedicated `FoodTree.jsx` hierarchy renderer for this page (`MultiDay.jsx` stays unchanged, still serving Sleep/Exercise/Weight/Heart Rate/Steps):
+  - Totals no longer show on a separate footer line — they live only on each day's own summary line (with working links), and a single-day view still shows that day's totals in their own line above the meals for consistency.
+  - Meal summary lines are now clickable too, opening the same per-food pie popup scoped to just that meal.
+  - Macro labels renamed `P`/`C`/`F` → `Prot`/`Carb`/`Fat`.
+  - New quick-action toolbar between the tabs and the data: expand all / collapse all / collapse-to-year/quarter/month/week/day/meal (short letter badges with tooltips) / reset to default — buttons for a level with no matching node in the current view (e.g. Y/Q/M on a Week view) gray out automatically.
+  - Non-core meal entries (previously all dumped in one "Anytime" bucket) now split into Early/Morning/Afternoon/Late Night Snack, computed **dynamically per day** by comparing each entry's own timestamp against that specific day's real Breakfast/Lunch/Dinner times (not the source's own fixed-clock-window label), cascading past any missing reference meal.
+  - Week view (standalone or nested under Month/Year) now shows the real week-of-year number ("Week 36"), Sunday-aligned to match this app's own week start — not ISO 8601. A week straddling a year boundary shows both years ("Week 52/1").
+  - Week/Month/Quarter/Year now show the **average** of their contained days, not a sum, with the group's own clickable summary line opening a pie chart of its children's totals (Week/Month/Quarter slice by day, Year slices by month). Quarter gets this same treatment as an extra nesting level inside Year. This top-of-range summary line was missing initially for the view's own granularity (buildTree's "skip a single-group level" rule was silently eating it, the same reason Day view needed its own special case) — added a synthetic top header for Week/Month/Year views so "Week 37:", "September 2026:", "2026:" etc. always show, not just when nested inside a coarser view.
+  - **Color coding** on every meal/day/week/month/quarter/year summary (never individual food entries): calories yellow/red past meal (750/1200) or day-and-up (1800/2100) thresholds; protein green past 30g (meal) / 140g (day-and-up); carbs and fat flagged (yellow/red) against protein/calorie ratios, only above 200 kcal.
+  - Fixed a real performance bug found while verifying the Year view: the tree renderer was mounting every nested day/meal/entry into the DOM regardless of collapsed state (a native `<details>` only hides content via CSS, it doesn't unmount it), so a full year of data froze the tab solid. Fixed by only rendering a node's children when it's actually open — collapsed branches now cost nothing until expanded.
+  - Fixed macro-grid text overflowing/wrapping inside its fixed-width columns on the new top-level summary lines (missing the smaller summary font size the nested headers already used).
+
+### Known limitations (not addressed this pass)
+- "Log in" is not a reachable menu state — see V0.7.0's note below, still true, not addressed here either.
+- Fully expanding a Year view via the toolbar's "Expand all" mounts the whole year's data at once and can be slow — collapsed-by-default rendering (the common case) is fast; only the explicit full-expand action is heavy.
+
 ## V0.7.0 — 2026-09-10 03:00
 ### Changes
 - **Top-ribbon dropdown menu**, replacing the standalone Log out button — a hamburger button on the left opens Log out / Settings / Help / Sync / About. Sync is no longer a tab; it now opens the existing `Sync` component inside the shared `Popup` modal, unchanged otherwise.

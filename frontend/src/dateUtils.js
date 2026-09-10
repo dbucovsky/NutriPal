@@ -156,3 +156,27 @@ export function formatQuarterLabel(quarterKeyStr) {
   const [year, q] = quarterKeyStr.split('-Q')
   return `Q${q} ${year}`
 }
+
+function daysBetween(aDateStr, bDateStr) {
+  return Math.round((toDate(bDateStr) - toDate(aDateStr)) / 86400000)
+}
+
+// Weeks since the Sunday-aligned week containing Jan 1 of `year` - matches
+// this app's own Sunday-start weeks (see startOfWeek), not ISO 8601's
+// Monday-start/first-Thursday rule.
+function weekNumberInYear(dateStr, year) {
+  const jan1Sunday = startOfWeek(`${year}-01-01`)
+  return Math.floor(daysBetween(jan1Sunday, dateStr) / 7) + 1
+}
+
+// "Week 36", or "Week 52/1" for a week that straddles a year boundary
+// (numbered against each half's own year).
+export function formatWeekNumberLabel(weekStartDateStr) {
+  const startYear = weekStartDateStr.slice(0, 4)
+  const endDateStr = addDays(weekStartDateStr, 6)
+  const endYear = endDateStr.slice(0, 4)
+  if (startYear === endYear) {
+    return `Week ${weekNumberInYear(weekStartDateStr, startYear)}`
+  }
+  return `Week ${weekNumberInYear(weekStartDateStr, startYear)}/${weekNumberInYear(endDateStr, endYear)}`
+}

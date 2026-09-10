@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 
 const ITEMS = [
-  { key: 'logout', label: 'Log out' },
-  { key: 'settings', label: 'Settings' },
-  { key: 'help', label: 'Help' },
   { key: 'sync', label: 'Sync' },
+  { key: 'settings', label: 'Settings' },
+  { key: 'logout', label: 'Log out' },
+  { key: 'help', label: 'Help' },
   { key: 'about', label: 'About' },
 ]
 
