@@ -1,5 +1,15 @@
 # Changelog
 
+## V0.7.0 — 2026-09-10 03:00
+### Changes
+- **Top-ribbon dropdown menu**, replacing the standalone Log out button — a hamburger button on the left opens Log out / Settings / Help / Sync / About. Sync is no longer a tab; it now opens the existing `Sync` component inside the shared `Popup` modal, unchanged otherwise.
+- **Quick-sync icon** next to the menu — one click runs the exact same default incremental live sync (`runSync({ mode: 'live' })`, no `--days`/`--full` override) the Sync page's own "Live sync" button runs by default. There's no true "time of last successful sync" tracked in this app — confirmed in `scripts/sync-google-health.php`'s own docblock, the established incremental mode is a fixed 7-day lookback window — so that already-built mode, with its existing dedup/cross-source rules, *is* "since last sync" here today. Spins and disables itself while in flight, shows a transient "Synced" / error message that clears after a few seconds; the full progress panel/output log is still one click away via the menu's Sync popup for anyone who wants the detail.
+- **New `public/api/version.php`** backs an About popup showing the real current version, parsed from the top of `CHANGELOG.md` rather than a hardcoded string that would silently go stale on the next bump.
+- Settings/Help are minimal, honest popups (reusing `Popup.jsx`) — Settings plainly states there's nothing user-configurable yet rather than faking a form; Help is a short static list of what each tab/control does.
+
+### Known limitations (not addressed this pass)
+- "Log in" is not a reachable menu state — the app already full-screens the `Login` component whenever there's no current user, so the ribbon (and this menu) never renders while logged out. Not a new gap, just not fixed here.
+
 ## V0.6.0 — 2026-09-10 02:15
 ### Changes
 - **Hierarchical day-collapsing**: multi-day views now group days into weeks, weeks into months, months into quarters, and quarters into years (`MultiDay.jsx`) instead of one flat list of day-sections — a Year view now shows 3-4 collapsed quarters instead of up to 365 day-sections. Any level that would only produce a single group for the requested range is skipped entirely, so Day/Week views stay pixel-identical to before. Applies automatically to every page that already used `MultiDay` (Food, Sleep, Exercise, Weight, Heart Rate, Steps).

@@ -98,6 +98,15 @@ export async function getSyncProgress(type) {
   return res.json()
 }
 
+export async function getAppVersion() {
+  const res = await fetch('/api/version.php')
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to load version')
+  }
+  return data.version
+}
+
 export async function importHealthConnect(path) {
   const res = await fetch('/api/import-hc.php', {
     method: 'POST',

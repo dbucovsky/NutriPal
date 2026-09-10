@@ -8,6 +8,10 @@ import Weight from './components/Weight'
 import Steps from './components/Steps'
 import Sync from './components/Sync'
 import DateNav from './components/DateNav'
+import MenuDropdown from './components/MenuDropdown'
+import QuickSyncButton from './components/QuickSyncButton'
+import Popup from './components/Popup'
+import { AboutPanel, HelpPanel, SettingsPanel } from './components/InfoPanels'
 import { todayLocal } from './dateUtils'
 import './App.css'
 
@@ -20,12 +24,30 @@ const TABS = [
   { key: 'exercise', label: 'Exercise', Component: Exercise },
   { key: 'weight', label: 'Weight', Component: Weight },
   { key: 'steps', label: 'Steps', Component: Steps },
-  { key: 'sync', label: 'Sync', Component: Sync },
 ]
 
-// Only these tabs understand a multi-day view; Sync stays day-only (it
-// doesn't even use the date, it always acts on "now").
-const MULTI_DAY_TABS = new Set(['food', 'heart-rate', 'sleep', 'exercise', 'weight', 'steps'])
+// Sync/Settings/Help/About all open as a popup from the menu now, not a tab.
+const PANEL_TITLES = {
+  sync: 'Sync',
+  settings: 'Settings',
+  help: 'Help',
+  about: 'About',
+}
+
+function renderPanel(panel) {
+  switch (panel) {
+    case 'sync':
+      return <Sync />
+    case 'settings':
+      return <SettingsPanel />
+    case 'help':
+      return <HelpPanel />
+    case 'about':
+      return <AboutPanel />
+    default:
+      return null
+  }
+}
 
 function loadStoredUser() {
   try {
@@ -39,10 +61,9 @@ function loadStoredUser() {
 function App() {
   const [currentUser, setCurrentUser] = useState(loadStoredUser)
   const [activeTab, setActiveTab] = useState(TABS[0].key)
+  const [openPanel, setOpenPanel] = useState(null) // 'sync' | 'settings' | 'help' | 'about' | null
   // Shared across every tab, so switching tabs keeps the same day/range
   // selected rather than each page defaulting back to today independently.
-  // `type` defaults to 'day' so nothing changes for tabs that never touch
-  // view modes (Heart Rate, Sync just read `view.date`).
   const [view, setView] = useState(() => ({ type: 'day', date: todayLocal(), endDate: todayLocal() }))
 
   function handleLogin(user) {
@@ -60,27 +81,18 @@ function App() {
   }
 
   const Active = TABS.find((t) => t.key === activeTab).Component
-  const showViewModes = MULTI_DAY_TABS.has(activeTab)
-
-  // Tabs without multi-day support (just Sync) only ever read `view.date`
-  // and never touch `view.type` - so they're shown a forced-'day' nav (no
-  // leftover week/month/year arrow-stepping) without that override ever
-  // overwriting the real shared view mode, which the user expects to
-  // still be there when they switch back to e.g. Food.
-  const displayedView = showViewModes ? view : { ...view, type: 'day' }
-
-  function handleViewChange(next) {
-    setView(showViewModes ? next : { ...view, date: next.date })
-  }
 
   return (
     <div className="app">
       <header className="app-header">
+        <div className="header-left">
+          <QuickSyncButton />
+          <MenuDropdown onSelect={setOpenPanel} onLogout={handleLogout} />
+        </div>
         <span>Logged in as {currentUser.name}</span>
-        <button onClick={handleLogout}>Log out</button>
       </header>
 
-      <DateNav view={displayedView} onChange={handleViewChange} showViewModes={showViewModes} />
+      <DateNav view={view} onChange={setView} showViewModes />
 
       <nav className="tab-nav">
         {TABS.map((tab) => (
@@ -95,6 +107,12 @@ function App() {
       </nav>
 
       <Active userId={currentUser.id} date={view.date} view={view} />
+
+      {openPanel && (
+        <Popup title={PANEL_TITLES[openPanel]} onClose={() => setOpenPanel(null)}>
+          {renderPanel(openPanel)}
+        </Popup>
+      )}
     </div>
   )
 }
