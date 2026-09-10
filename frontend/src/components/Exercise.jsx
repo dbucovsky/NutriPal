@@ -7,6 +7,14 @@ function stat(value, unit = '') {
   return value === null || value === undefined ? '—' : `${value}${unit}`
 }
 
+function daySummary(day) {
+  const count = day.sessions.length
+  const totalMinutes = day.sessions.reduce((sum, s) => sum + (s.duration_minutes || 0), 0)
+  const totalCalories = day.sessions.reduce((sum, s) => sum + (s.calories || 0), 0)
+  const sessionWord = count === 1 ? 'session' : 'sessions'
+  return `${count} ${sessionWord} · ${totalMinutes} min · ${totalCalories} kcal`
+}
+
 function DayBody({ sessions }) {
   return (
     <ul className="exercise-list">
@@ -64,7 +72,11 @@ export default function Exercise({ userId, view }) {
       {data && !loading && (
         <>
           {data.days.length === 0 && <p>No exercise logged for this period.</p>}
-          <MultiDay days={data.days} renderDay={(day) => <DayBody key={day.date} {...day} />} />
+          <MultiDay
+            days={data.days}
+            renderDay={(day) => <DayBody key={day.date} {...day} />}
+            renderSummary={daySummary}
+          />
         </>
       )}
     </div>

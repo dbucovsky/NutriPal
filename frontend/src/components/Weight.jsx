@@ -13,6 +13,14 @@ function readingTimestamp(utcDateTimeStr) {
   return new Date(utcDateTimeStr.replace(' ', 'T') + 'Z').getTime()
 }
 
+function daySummary(day) {
+  const values = day.readings.map((r) => r.value_lb)
+  if (values.length === 1) return `${values[0]} lb`
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  return min === max ? `${min} lb · ${values.length} readings` : `${min}–${max} lb · ${values.length} readings`
+}
+
 function DayBody({ readings }) {
   return (
     <ul className="weight-list">
@@ -108,7 +116,11 @@ export default function Weight({ userId, view }) {
             </div>
           )}
 
-          <MultiDay days={data.days} renderDay={(day) => <DayBody key={day.date} {...day} />} />
+          <MultiDay
+            days={data.days}
+            renderDay={(day) => <DayBody key={day.date} {...day} />}
+            renderSummary={daySummary}
+          />
         </>
       )}
     </div>

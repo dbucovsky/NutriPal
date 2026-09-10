@@ -6,7 +6,10 @@ import { formatDisplayDate } from '../dateUtils'
 // data) - so single-day pages stay pixel-identical to before this existed.
 // Open-by-default only for short ranges (week/custom-few-days); month/year
 // default collapsed so a year view doesn't open up to 365 sections at once.
-export default function MultiDay({ days, renderDay }) {
+// `renderSummary(day)`, when given, renders aggregated stats (e.g. daily
+// totals) into the summary line itself, so collapsing a day doesn't hide
+// the one thing worth seeing about it at a glance.
+export default function MultiDay({ days, renderDay, renderSummary }) {
   if (days.length === 0) {
     return null
   }
@@ -20,7 +23,10 @@ export default function MultiDay({ days, renderDay }) {
     <>
       {days.map((day) => (
         <details key={day.date} className="day-section" open={defaultOpen}>
-          <summary className="day-section-header">{formatDisplayDate(day.date)}</summary>
+          <summary className="day-section-header">
+            <span className="day-section-title">{formatDisplayDate(day.date)}</span>
+            {renderSummary && <span className="day-section-summary">{renderSummary(day)}</span>}
+          </summary>
           {renderDay(day)}
         </details>
       ))}

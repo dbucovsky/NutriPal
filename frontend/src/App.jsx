@@ -21,8 +21,9 @@ const TABS = [
   { key: 'sync', label: 'Sync', Component: Sync },
 ]
 
-// Only these tabs understand a multi-day view; Heart Rate/Sync stay day-only.
-const MULTI_DAY_TABS = new Set(['food', 'sleep', 'exercise', 'weight'])
+// Only these tabs understand a multi-day view; Sync stays day-only (it
+// doesn't even use the date, it always acts on "now").
+const MULTI_DAY_TABS = new Set(['food', 'heart-rate', 'sleep', 'exercise', 'weight'])
 
 function loadStoredUser() {
   try {
@@ -59,11 +60,11 @@ function App() {
   const Active = TABS.find((t) => t.key === activeTab).Component
   const showViewModes = MULTI_DAY_TABS.has(activeTab)
 
-  // Tabs without multi-day support (Heart Rate, Sync) only ever read
-  // `view.date` and never touch `view.type` - so they're shown a
-  // forced-'day' nav (no leftover week/month/year arrow-stepping) without
-  // that override ever overwriting the real shared view mode, which the
-  // user expects to still be there when they switch back to e.g. Food.
+  // Tabs without multi-day support (just Sync) only ever read `view.date`
+  // and never touch `view.type` - so they're shown a forced-'day' nav (no
+  // leftover week/month/year arrow-stepping) without that override ever
+  // overwriting the real shared view mode, which the user expects to
+  // still be there when they switch back to e.g. Food.
   const displayedView = showViewModes ? view : { ...view, type: 'day' }
 
   function handleViewChange(next) {

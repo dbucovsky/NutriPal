@@ -16,16 +16,6 @@ export async function login(email) {
   return data
 }
 
-async function getJson(endpoint, userId, date, errorLabel) {
-  const params = new URLSearchParams({ user_id: userId, date })
-  const res = await fetch(`/api/${endpoint}?${params}`)
-  const data = await res.json()
-  if (!res.ok) {
-    throw new Error(data.error || errorLabel)
-  }
-  return data
-}
-
 // `view` is { type: 'day'|'week'|'month'|'year'|'custom', date, endDate }.
 // endDate is only sent (and only meaningful) for view=custom.
 async function getRangeJson(endpoint, userId, view, errorLabel) {
@@ -45,8 +35,8 @@ export function getFoodLog(userId, view) {
   return getRangeJson('food-log.php', userId, view, 'Failed to load food log')
 }
 
-export function getHeartRate(userId, date) {
-  return getJson('heart-rate.php', userId, date, 'Failed to load heart rate')
+export function getHeartRate(userId, view) {
+  return getRangeJson('heart-rate.php', userId, view, 'Failed to load heart rate')
 }
 
 export function getSleep(userId, view) {

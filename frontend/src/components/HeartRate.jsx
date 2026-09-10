@@ -9,6 +9,7 @@ import {
 import annotationPlugin from 'chartjs-plugin-annotation'
 import { Line } from 'react-chartjs-2'
 import { getHeartRate } from '../api'
+import MultiDay from './MultiDay'
 
 ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, annotationPlugin)
 
@@ -39,35 +40,17 @@ function periodsToAnnotations(periods, color, prefix) {
   return annotations
 }
 
-export default function HeartRate({ userId, date }) {
-  const [data, setData] = useState(null)
-  const [error, setError] = useState(null)
-  const [loading, setLoading] = useState(true)
+function daySummary(day) {
+  if (day.summary.reading_count === 0) return 'No bpm readings'
+  return `avg ${day.summary.avg_bpm} bpm · resting ${stat(day.summary.resting_bpm, ' bpm')}`
+}
 
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    setError(null)
-    getHeartRate(userId, date)
-      .then((result) => {
-        if (!cancelled) setData(result)
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err.message)
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [userId, date])
-
-  const chartData = data && {
+function DayBody({ summary, series, exercise_periods: exercisePeriods, sleep_periods: sleepPeriods, seriesIncluded }) {
+  const chartData = {
     datasets: [
       {
         label: 'bpm',
-        data: data.series.map((p) => ({ x: p.minute, y: p.avg_bpm })),
+        data: series.map((p) => ({ x: p.minute, y: p.avg_bpm })),
         borderColor: '#2f7d4f',
         backgroundColor: '#2f7d4f',
         pointRadius: 0,
@@ -77,14 +60,14 @@ export default function HeartRate({ userId, date }) {
     ],
   }
 
-  const chartOptions = data && {
+  const chartOptions = {
     responsive: true,
     plugins: {
       legend: { display: false },
       annotation: {
         annotations: {
-          ...periodsToAnnotations(data.sleep_periods, SLEEP_COLOR, 'sleep'),
-          ...periodsToAnnotations(data.exercise_periods, EXERCISE_COLOR, 'exercise'),
+          ...periodsToAnnotations(sleepPeriods, SLEEP_COLOR, 'sleep'),
+          ...periodsToAnnotations(exercisePeriods, EXERCISE_COLOR, 'exercise'),
         },
       },
     },
@@ -100,53 +83,91 @@ export default function HeartRate({ userId, date }) {
   }
 
   return (
+    <>
+      <div className="stat-row">
+        <div className="stat">
+          <span className="stat-label">Resting</span>
+          <span className="stat-value">{stat(summary.resting_bpm, ' bpm')}</span>
+        </div>
+        <div className="stat">
+          <span className="stat-label">Avg</span>
+          <span className="stat-value">{stat(summary.avg_bpm, ' bpm')}</span>
+        </div>
+        <div className="stat">
+          <span className="stat-label">Min / Max</span>
+          <span className="stat-value">
+            {stat(summary.min_bpm)} / {stat(summary.max_bpm)} bpm
+          </span>
+        </div>
+        <div className="stat">
+          <span className="stat-label">Avg HRV</span>
+          <span className="stat-value">{stat(summary.avg_hrv_ms, ' ms')}</span>
+        </div>
+      </div>
+
+      {(sleepPeriods.length > 0 || exercisePeriods.length > 0) && (
+        <div className="stage-legend chart-legend">
+          <span className="stage-legend-item">
+            <span className="stage-swatch" style={{ backgroundColor: SLEEP_COLOR }} />
+            Sleep
+          </span>
+          <span className="stage-legend-item">
+            <span className="stage-swatch" style={{ backgroundColor: EXERCISE_COLOR }} />
+            Exercise
+          </span>
+        </div>
+      )}
+
+      {series.length > 0 ? (
+        <div className="chart-wrap">
+          <Line data={chartData} options={chartOptions} />
+        </div>
+      ) : seriesIncluded ? (
+        <p>No heart rate readings this day.</p>
+      ) : (
+        <p className="text-muted">Chart hidden for Month/Year/long Custom views — switch to Day or Week to see it.</p>
+      )}
+    </>
+  )
+}
+
+export default function HeartRate({ userId, view }) {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    getHeartRate(userId, view)
+      .then((result) => {
+        if (!cancelled) setData(result)
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [userId, view.type, view.date, view.endDate])
+
+  return (
     <div className="heart-rate">
       {loading && <p>Loading…</p>}
       {error && <p className="login-error">{error}</p>}
 
       {data && !loading && (
         <>
-          <div className="stat-row">
-            <div className="stat">
-              <span className="stat-label">Resting</span>
-              <span className="stat-value">{stat(data.summary.resting_bpm, ' bpm')}</span>
-            </div>
-            <div className="stat">
-              <span className="stat-label">Avg</span>
-              <span className="stat-value">{stat(data.summary.avg_bpm, ' bpm')}</span>
-            </div>
-            <div className="stat">
-              <span className="stat-label">Min / Max</span>
-              <span className="stat-value">
-                {stat(data.summary.min_bpm)} / {stat(data.summary.max_bpm)} bpm
-              </span>
-            </div>
-            <div className="stat">
-              <span className="stat-label">Avg HRV</span>
-              <span className="stat-value">{stat(data.summary.avg_hrv_ms, ' ms')}</span>
-            </div>
-          </div>
-
-          {(data.sleep_periods.length > 0 || data.exercise_periods.length > 0) && (
-            <div className="stage-legend chart-legend">
-              <span className="stage-legend-item">
-                <span className="stage-swatch" style={{ backgroundColor: SLEEP_COLOR }} />
-                Sleep
-              </span>
-              <span className="stage-legend-item">
-                <span className="stage-swatch" style={{ backgroundColor: EXERCISE_COLOR }} />
-                Exercise
-              </span>
-            </div>
-          )}
-
-          {data.series.length > 0 ? (
-            <div className="chart-wrap">
-              <Line data={chartData} options={chartOptions} />
-            </div>
-          ) : (
-            <p>No heart rate readings this day.</p>
-          )}
+          {data.days.length === 0 && <p>No heart rate readings this period.</p>}
+          <MultiDay
+            days={data.days}
+            renderDay={(day) => <DayBody key={day.date} {...day} seriesIncluded={data.series_included} />}
+            renderSummary={daySummary}
+          />
         </>
       )}
     </div>

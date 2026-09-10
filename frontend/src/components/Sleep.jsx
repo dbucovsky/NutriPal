@@ -25,6 +25,25 @@ function sleepQuality(stageType, totalMinutes) {
   return { label: 'good', className: 'quality-good' }
 }
 
+function daySummary(day) {
+  const totalMinutes = day.sessions.reduce((sum, s) => sum + s.duration_minutes, 0)
+  const stageSums = {}
+  day.sessions.forEach((s) => {
+    s.stage_totals.forEach((st) => {
+      stageSums[st.stage_type] = (stageSums[st.stage_type] || 0) + st.minutes
+    })
+  })
+
+  const parts = [formatHoursMinutes(totalMinutes)]
+  if (day.sessions.length > 1) parts.push(`${day.sessions.length} sessions`)
+  for (const stageType of ['REM', 'DEEP']) {
+    if (stageSums[stageType] === undefined) continue
+    const quality = sleepQuality(stageType, stageSums[stageType])
+    parts.push(`${stageType} ${formatHoursMinutes(stageSums[stageType])}${quality ? ` (${quality.label})` : ''}`)
+  }
+  return parts.join(' · ')
+}
+
 function DayBody({ sessions }) {
   return (
     <>
@@ -130,7 +149,11 @@ export default function Sleep({ userId, view }) {
       {data && !loading && (
         <>
           {data.days.length === 0 && <p>No sleep logged for this period.</p>}
-          <MultiDay days={data.days} renderDay={(day) => <DayBody key={day.date} {...day} />} />
+          <MultiDay
+            days={data.days}
+            renderDay={(day) => <DayBody key={day.date} {...day} />}
+            renderSummary={daySummary}
+          />
         </>
       )}
     </div>

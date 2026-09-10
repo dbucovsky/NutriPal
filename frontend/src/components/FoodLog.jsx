@@ -15,12 +15,40 @@ function macro(value, unit = 'g') {
   return value === null || value === undefined ? '—' : `${value}${unit}`
 }
 
+function macroSummary(totals) {
+  return (
+    <>
+      {macro(totals.energy_kcal, ' kcal')} · P {macro(totals.protein_g)} · C {macro(totals.carb_g)} · F{' '}
+      {macro(totals.fat_g)}
+    </>
+  )
+}
+
+function mealTotals(entries) {
+  const totals = { energy_kcal: 0, protein_g: 0, carb_g: 0, fat_g: 0 }
+  let any = false
+  for (const key of Object.keys(totals)) {
+    for (const entry of entries) {
+      if (entry[key] !== null && entry[key] !== undefined) {
+        totals[key] += entry[key]
+        any = true
+      }
+    }
+    totals[key] = any ? Math.round(totals[key] * 100) / 100 : null
+    any = false
+  }
+  return totals
+}
+
 function DayBody({ meals, totals }) {
   return (
     <>
       {MEAL_ORDER.filter((meal) => meals[meal]?.length).map((meal) => (
         <details key={meal} className="meal-section" open>
-          <summary>{MEAL_LABELS[meal]}</summary>
+          <summary>
+            <span className="meal-section-title">{MEAL_LABELS[meal]}</span>
+            <span className="meal-section-summary">{macroSummary(mealTotals(meals[meal]))}</span>
+          </summary>
           <ul>
             {meals[meal].map((entry) => (
               <li key={entry.id} className="food-entry">
@@ -42,8 +70,7 @@ function DayBody({ meals, totals }) {
       ))}
 
       <footer className="daily-totals">
-        <strong>Totals:</strong> {macro(totals.energy_kcal, ' kcal')} · P{' '}
-        {macro(totals.protein_g)} · C {macro(totals.carb_g)} · F {macro(totals.fat_g)}
+        <strong>Totals:</strong> {macroSummary(totals)}
       </footer>
     </>
   )
@@ -81,7 +108,11 @@ export default function FoodLog({ userId, view }) {
       {data && !loading && (
         <>
           {data.days.length === 0 && <p>No food logged for this period.</p>}
-          <MultiDay days={data.days} renderDay={(day) => <DayBody key={day.date} {...day} />} />
+          <MultiDay
+            days={data.days}
+            renderDay={(day) => <DayBody key={day.date} {...day} />}
+            renderSummary={(day) => macroSummary(day.totals)}
+          />
         </>
       )}
     </div>
