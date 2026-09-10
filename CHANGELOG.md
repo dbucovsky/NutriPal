@@ -1,5 +1,9 @@
 # Changelog
 
+## V0.3.0 — 2026-09-09 23:50
+### Changes
+- **Weight page now shows a trend line chart**, not just a per-day list. Reuses `chart.js`/`react-chartjs-2` (already a dependency for the Heart Rate chart) — a linear x-axis over each reading's real timestamp (epoch ms) with a tick/tooltip callback formatting it back to a date, since there's no time-scale adapter installed yet. Only rendered when a range has 2+ readings (a single point isn't a trend); the per-day list stays underneath regardless, since exact values/timestamps are still useful next to the chart.
+
 ## V0.2.0 — 2026-09-09 23:30
 ### Changes
 - **Prev/next arrows next to the date nav**, stepping by whatever the current view's period is (a day in Day view, a week in Week view, a whole month in Month view, a year in Year view) — added `LocalDay::resolveRange()`/`stepDateByView()` alongside the existing single-day helpers rather than replacing them, so Heart Rate/Sync (still day-only) are unaffected.
