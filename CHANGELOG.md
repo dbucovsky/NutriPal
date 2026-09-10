@@ -1,5 +1,14 @@
 # Changelog
 
+## V0.5.0 — 2026-09-10 01:15
+### Changes
+- **New Steps page** (`public/api/steps.php`, `frontend/src/components/Steps.jsx`) with a daily bar chart, plus Day/Week/Month/Year/Custom views like the other pages.
+- **Found and worked around a real, previously-documented-but-unfixed bug before shipping this**: `steps_readings` has an already-known open cross-source duplication problem (see `doc/wiki/Database-Schema.md`'s Open Items) — Health Connect's bulk import and the live Google Health API sync each independently report steps for overlapping real time windows at different timestamps, so summing every row for a day double- or triple-counts. Confirmed directly: 2026-09-09 has one live-API stream reporting 16,830 steps and another reporting 6,380 for the same day.
+- Asked before building rather than shipping inflated numbers. A first heuristic (prefer the live API's own sources whenever present, fall back to Health Connect only when the API had nothing that day) was disproven by real data — 2026-09-07's live-API source reported only 1,381 steps while a same-day Health-Connect-imported source reported 16,419, clearly the fuller day. Replaced with a simpler, honester rule: per day, use whichever single `data_source_id` reported the most steps, regardless of which pipeline it came from. The chosen source (and every other source's total that day, for transparency) is shown in the UI — this is a disclosed heuristic, not a real fix.
+
+### Known limitations (not addressed this pass)
+- Steps' cross-source duplication is worked around (pick the day's highest-reporting source) but not actually reconciled the way food_log_entries/sleep/exercise/measurements were earlier — a real fix would need the same kind of natural-key cross-source merge work, not just picking a winner and discarding the rest.
+
 ## V0.4.0 — 2026-09-10 00:40
 ### Changes
 - **Heart Rate now supports Day/Week/Month/Year/Custom views**, matching Food/Sleep/Exercise/Weight. `heart-rate.php` groups its per-day summary/series/overlay data into the same `days[]` shape the other range-aware endpoints already use; the frontend wraps it in the same `MultiDay` collapsible-per-day component.

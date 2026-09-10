@@ -51,6 +51,10 @@ export function getWeight(userId, view) {
   return getRangeJson('weight.php', userId, view, 'Failed to load weight')
 }
 
+export function getSteps(userId, view) {
+  return getRangeJson('steps.php', userId, view, 'Failed to load steps')
+}
+
 export async function runSync(body) {
   const res = await fetch('/api/run-sync.php', {
     method: 'POST',

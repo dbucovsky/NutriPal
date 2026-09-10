@@ -5,6 +5,7 @@ import HeartRate from './components/HeartRate'
 import Sleep from './components/Sleep'
 import Exercise from './components/Exercise'
 import Weight from './components/Weight'
+import Steps from './components/Steps'
 import Sync from './components/Sync'
 import DateNav from './components/DateNav'
 import { todayLocal } from './dateUtils'
@@ -18,12 +19,13 @@ const TABS = [
   { key: 'sleep', label: 'Sleep', Component: Sleep },
   { key: 'exercise', label: 'Exercise', Component: Exercise },
   { key: 'weight', label: 'Weight', Component: Weight },
+  { key: 'steps', label: 'Steps', Component: Steps },
   { key: 'sync', label: 'Sync', Component: Sync },
 ]
 
 // Only these tabs understand a multi-day view; Sync stays day-only (it
 // doesn't even use the date, it always acts on "now").
-const MULTI_DAY_TABS = new Set(['food', 'heart-rate', 'sleep', 'exercise', 'weight'])
+const MULTI_DAY_TABS = new Set(['food', 'heart-rate', 'sleep', 'exercise', 'weight', 'steps'])
 
 function loadStoredUser() {
   try {

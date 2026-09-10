@@ -460,6 +460,22 @@
   border-bottom: 1px dashed var(--border);
 }
 
+/* Steps */
+
+.steps-day-detail {
+  padding: 4px 0 12px;
+}
+
+.steps-day-total {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.steps-other-sources {
+  margin-top: 4px;
+  font-size: 0.8rem;
+}
+
 /* Sync */
 
 .sync-section {
