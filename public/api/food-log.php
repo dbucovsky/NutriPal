@@ -2,10 +2,11 @@
 
 declare(strict_types=1);
 
-// GET /api/food-log.php?user_id=2&date=YYYY-MM-DD
-// date defaults to "today" in APP_TIMEZONE (not UTC). No authorization
-// check on user_id — matches every other still-single-user script in this
-// project; real auth is future work.
+// GET /api/food-log.php?user_id=2&date=YYYY-MM-DD&view=day|week|month|year|custom&end_date=YYYY-MM-DD
+// date defaults to "today" in APP_TIMEZONE (not UTC), view defaults to
+// "day" (end_date is only used, and required, for view=custom). No
+// authorization check on user_id — matches every other still-single-user
+// script in this project; real auth is future work.
 
 require_once __DIR__ . '/../../src/Env.php';
 require_once __DIR__ . '/../../src/Database.php';
@@ -21,8 +22,11 @@ if ($userId <= 0) {
     exit;
 }
 
+$view = $_GET['view'] ?? 'day';
+$timezone = Env::get('APP_TIMEZONE', 'UTC');
+
 try {
-    [$localDate, $dayStart, $dayEnd] = LocalDay::resolve(Env::get('APP_TIMEZONE', 'UTC'), $_GET['date'] ?? null);
+    [$startDate, $endDate, $dayStart, $dayEnd] = LocalDay::resolveRange($timezone, $view, $_GET['date'] ?? null, $_GET['end_date'] ?? null);
 } catch (Exception $e) {
     http_response_code(400);
     echo json_encode(['error' => 'invalid date']);
@@ -36,7 +40,7 @@ $stmt = $pdo->prepare(
     // human-readable unit name is unit_conversions.name for a standard
     // unit ("gram") or foods_db_custom_units.unit_name for a per-food
     // custom one ("fl oz", "scoop", "reported serving").
-    "SELECT fle.id, fd.name, fd.brand_name, fle.serving_amount,
+    "SELECT fle.id, fle.start_time, fd.name, fd.brand_name, fle.serving_amount,
             COALESCE(uc.name, fdcu.unit_name) AS serving_unit_label,
             mt.name AS meal_type,
             COALESCE(uc.factor_to_base, fdcu.equivalent_amount) AS unit_amount,
@@ -56,9 +60,8 @@ $scaleValue = static function (?string $per100, float $scale): ?float {
     return $per100 === null ? null : round(((float) $per100) * $scale, 2);
 };
 
-$meals = ['BREAKFAST' => [], 'LUNCH' => [], 'DINNER' => [], 'SNACK' => [], 'ANYTIME' => []];
-$totals = ['energy_kcal' => 0.0, 'protein_g' => 0.0, 'carb_g' => 0.0, 'fat_g' => 0.0];
-$hasAny = false;
+$MEAL_KEYS = ['BREAKFAST', 'LUNCH', 'DINNER', 'SNACK', 'ANYTIME'];
+$dayBuckets = [];
 
 foreach ($stmt as $row) {
     $unitAmount = $row['unit_amount'] !== null ? (float) $row['unit_amount'] : null;
@@ -76,27 +79,43 @@ foreach ($stmt as $row) {
         'fat_g' => $scale !== null ? $scaleValue($row['total_fat_g'], $scale) : null,
     ];
 
+    $localDate = LocalDay::toLocalDate($timezone, $row['start_time']);
+    if (!isset($dayBuckets[$localDate])) {
+        $dayBuckets[$localDate] = [
+            'meals' => array_fill_keys($MEAL_KEYS, []),
+            'totals' => ['energy_kcal' => 0.0, 'protein_g' => 0.0, 'carb_g' => 0.0, 'fat_g' => 0.0],
+        ];
+    }
+
     // lut_meal_type has more values than the 5 main buckets shown here
     // (BEFORE_BREAKFAST, BEFORE_LUNCH, BEFORE_DINNER, AFTER_DINNER) — fold
     // those into ANYTIME for this simple first view rather than adding
     // sparse extra sections.
-    $mealType = array_key_exists($row['meal_type'], $meals) ? $row['meal_type'] : 'ANYTIME';
-    $meals[$mealType][] = $entry;
-    $hasAny = true;
+    $mealType = in_array($row['meal_type'], $MEAL_KEYS, true) ? $row['meal_type'] : 'ANYTIME';
+    $dayBuckets[$localDate]['meals'][$mealType][] = $entry;
 
     foreach (['energy_kcal', 'protein_g', 'carb_g', 'fat_g'] as $key) {
         if ($entry[$key] !== null) {
-            $totals[$key] += $entry[$key];
+            $dayBuckets[$localDate]['totals'][$key] += $entry[$key];
         }
     }
 }
 
-foreach ($totals as $key => $value) {
-    $totals[$key] = round($value, 2);
+$days = [];
+foreach ($dayBuckets as $localDate => $bucket) {
+    foreach ($bucket['totals'] as $key => $value) {
+        $bucket['totals'][$key] = round($value, 2);
+    }
+    $days[] = [
+        'date' => $localDate,
+        'meals' => array_filter($bucket['meals'], fn($rows) => !empty($rows)),
+        'totals' => $bucket['totals'],
+    ];
 }
 
 echo json_encode([
-    'date' => $localDate,
-    'meals' => $hasAny ? array_filter($meals, fn($rows) => !empty($rows)) : new stdClass(),
-    'totals' => $totals,
+    'view' => $view,
+    'start_date' => $startDate,
+    'end_date' => $endDate,
+    'days' => $days,
 ]);

@@ -2,8 +2,9 @@
 
 declare(strict_types=1);
 
-// GET /api/exercise.php?user_id=2&date=YYYY-MM-DD
-// Exercise sessions starting on the requested local day.
+// GET /api/exercise.php?user_id=2&date=YYYY-MM-DD&view=day|week|month|year|custom&end_date=YYYY-MM-DD
+// Exercise sessions starting on the requested local day/range. view
+// defaults to "day"; end_date is only used, and required, for view=custom.
 
 require_once __DIR__ . '/../../src/Env.php';
 require_once __DIR__ . '/../../src/Database.php';
@@ -19,8 +20,11 @@ if ($userId <= 0) {
     exit;
 }
 
+$view = $_GET['view'] ?? 'day';
+$timezone = Env::get('APP_TIMEZONE', 'UTC');
+
 try {
-    [$localDate, $dayStart, $dayEnd] = LocalDay::resolve(Env::get('APP_TIMEZONE', 'UTC'), $_GET['date'] ?? null);
+    [$startDate, $endDate, $dayStart, $dayEnd] = LocalDay::resolveRange($timezone, $view, $_GET['date'] ?? null, $_GET['end_date'] ?? null);
 } catch (Exception $e) {
     http_response_code(400);
     echo json_encode(['error' => 'invalid date']);
@@ -40,9 +44,10 @@ $stmt = $pdo->prepare(
 );
 $stmt->execute([$userId, $dayStart, $dayEnd]);
 
-$sessions = [];
+$sessionsByDate = [];
 foreach ($stmt as $row) {
-    $sessions[] = [
+    $localDate = LocalDay::toLocalDate($timezone, $row['start_time']);
+    $sessionsByDate[$localDate][] = [
         'id' => (int) $row['id'],
         'start_time' => $row['start_time'],
         'end_time' => $row['end_time'],
@@ -59,7 +64,14 @@ foreach ($stmt as $row) {
     ];
 }
 
+$days = [];
+foreach ($sessionsByDate as $localDate => $sessions) {
+    $days[] = ['date' => $localDate, 'sessions' => $sessions];
+}
+
 echo json_encode([
-    'date' => $localDate,
-    'sessions' => $sessions,
+    'view' => $view,
+    'start_date' => $startDate,
+    'end_date' => $endDate,
+    'days' => $days,
 ]);

@@ -26,20 +26,39 @@ async function getJson(endpoint, userId, date, errorLabel) {
   return data
 }
 
-export function getFoodLog(userId, date) {
-  return getJson('food-log.php', userId, date, 'Failed to load food log')
+// `view` is { type: 'day'|'week'|'month'|'year'|'custom', date, endDate }.
+// endDate is only sent (and only meaningful) for view=custom.
+async function getRangeJson(endpoint, userId, view, errorLabel) {
+  const params = new URLSearchParams({ user_id: userId, date: view.date, view: view.type })
+  if (view.type === 'custom') {
+    params.set('end_date', view.endDate)
+  }
+  const res = await fetch(`/api/${endpoint}?${params}`)
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || errorLabel)
+  }
+  return data
+}
+
+export function getFoodLog(userId, view) {
+  return getRangeJson('food-log.php', userId, view, 'Failed to load food log')
 }
 
 export function getHeartRate(userId, date) {
   return getJson('heart-rate.php', userId, date, 'Failed to load heart rate')
 }
 
-export function getSleep(userId, date) {
-  return getJson('sleep.php', userId, date, 'Failed to load sleep')
+export function getSleep(userId, view) {
+  return getRangeJson('sleep.php', userId, view, 'Failed to load sleep')
 }
 
-export function getExercise(userId, date) {
-  return getJson('exercise.php', userId, date, 'Failed to load exercise')
+export function getExercise(userId, view) {
+  return getRangeJson('exercise.php', userId, view, 'Failed to load exercise')
+}
+
+export function getWeight(userId, view) {
+  return getRangeJson('weight.php', userId, view, 'Failed to load weight')
 }
 
 export async function runSync(body) {

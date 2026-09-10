@@ -85,9 +85,65 @@
 .date-nav {
   position: relative;
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.date-nav-arrows {
+  position: relative;
+  display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 16px;
+  gap: 4px;
+}
+
+.date-arrow {
+  font-size: 1.3rem;
+  line-height: 1;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+
+.date-arrow:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.date-nav-custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.date-nav-custom input {
+  padding: 4px 6px;
+}
+
+.view-mode-nav {
+  display: flex;
+  gap: 4px;
+}
+
+.view-mode {
+  font-size: 0.8rem;
+  border: 1px solid var(--border);
+  background: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 3px 10px;
+  border-radius: 12px;
+}
+
+.view-mode.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
 }
 
 .date-display {
@@ -119,14 +175,30 @@
   pointer-events: none;
 }
 
+.day-section {
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.day-section-header {
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 6px 0;
+}
+
 .meal-section {
   margin-bottom: 20px;
 }
 
-.meal-section h3 {
+.meal-section summary {
   border-bottom: 1px solid var(--border);
   padding-bottom: 4px;
   margin-bottom: 8px;
+  cursor: pointer;
+  font-size: 1.05rem;
+  font-weight: 600;
 }
 
 .meal-section ul {
@@ -254,6 +326,46 @@
   border-radius: 2px;
 }
 
+.stage-segment-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.stage-segment-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.quality-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  color: white;
+  text-transform: uppercase;
+}
+
+.quality-bad {
+  background: #c0392b;
+}
+
+.quality-adequate {
+  background: #d9822b;
+}
+
+.quality-ok {
+  background: #c9a227;
+}
+
+.quality-good {
+  background: #3a8a4d;
+}
+
 /* Exercise */
 
 .exercise-list {
@@ -278,6 +390,23 @@
 .exercise-entry-stats {
   color: var(--text-muted);
   font-size: 0.85rem;
+}
+
+/* Weight */
+
+.weight-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.weight-entry {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--border);
 }
 
 /* Sync */

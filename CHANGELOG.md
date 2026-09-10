@@ -1,5 +1,19 @@
 # Changelog
 
+## V0.2.0 — 2026-09-09 23:30
+### Changes
+- **Prev/next arrows next to the date nav**, stepping by whatever the current view's period is (a day in Day view, a week in Week view, a whole month in Month view, a year in Year view) — added `LocalDay::resolveRange()`/`stepDateByView()` alongside the existing single-day helpers rather than replacing them, so Heart Rate/Sync (still day-only) are unaffected.
+- **Multi-day views (Day/Week/Month/Year/Custom) for Food, Sleep, Exercise, and the new Weight page.** `food-log.php`, `sleep.php`, `exercise.php` all gained `view`/`end_date` params and now return a `days[]` array grouped by local calendar day instead of one flat day; `LocalDay::resolveRange()` computes the UTC window for a Sunday-Saturday week / calendar month / calendar year / arbitrary custom range in one indexed query rather than looping per day. `view=day` still returns a one-day `days[]` array, so the frontend has a single code path for every view and Day view stays pixel-identical to before.
+- Multi-day results render as collapsible per-day sections (`frontend/src/components/MultiDay.jsx`, native `<details>/<summary>`, no new dependency) — open by default for short ranges (≤7 days), collapsed by default for month/year so a year view doesn't open hundreds of sections at once. Food additionally nests collapsible per-meal sections inside each day.
+- **New Weight page** (`public/api/weight.php`, `frontend/src/components/Weight.jsx`) — the `measurements`/`lut_measurement_type` tables already had everything needed from the sync work; converts stored grams to pounds server-side using `unit_conversions.factor_to_base` (no hardcoded conversion constant) rather than trusting a fixed factor that could drift from the DB's own units.
+- **Sleep durations now always show as H:MM** (`formatHoursMinutes()`), replacing the old "1h 15m" session style and the stage-totals legend's bare-minutes ("46m") — applied everywhere a sleep duration is shown, per request.
+- **Every sleep stage segment now shows its own start timestamp** — `sleep.php`'s stage query already selected `start_time` per segment but the response discarded it, keeping only the duration; now included and rendered in a new chronological per-segment list under the existing stage bar.
+- **REM/Deep quality badges** on the stage-totals legend, using the user's own target bands: <1:00 bad, 1:00–1:15 adequate, 1:15–1:30 ok, >1:30 good.
+
+### Known limitations (not addressed this pass)
+- Weight page has no charting/trend line yet — multi-day views list readings per day, same as Sleep/Exercise, no graph.
+- A day with zero entries in a multi-day range is simply omitted from `days[]` (matches the existing single-day "no X logged" convention) rather than shown as an explicit empty section — so a week view can't currently highlight "you didn't log food on Tuesday" at a glance.
+
 ## V0.1.10 — 2026-09-09 22:15
 ### Changes
 - **Fixed unclear/technical serving-unit labels in the food log UI.** Reported directly from the real UI: entries showed things like "2.84 api_951_gram" or "1 hc_reported_serving_266" instead of a readable quantity. Root cause: `public/api/food-log.php` selected `lut_serving_unit.label` for display — that column is an internal technical key (embeds the food id and source prefix) never meant to be shown to a user; the real human-readable name was already stored elsewhere (`unit_conversions.name` for standard units, `foods_db_custom_units.unit_name` for per-food custom ones) but wasn't being selected.
