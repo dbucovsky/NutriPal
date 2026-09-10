@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { getExercise } from '../api'
 import { formatLocalTime } from '../dateUtils'
 import MultiDay from './MultiDay'
+import SessionHrPopup from './SessionHrPopup'
 
 function stat(value, unit = '') {
   return value === null || value === undefined ? '—' : `${value}${unit}`
@@ -15,15 +16,21 @@ function daySummary(day) {
   return `${count} ${sessionWord} · ${totalMinutes} min · ${totalCalories} kcal`
 }
 
-function DayBody({ sessions }) {
+function DayBody({ userId, sessions }) {
   return (
     <ul className="exercise-list">
       {sessions.map((session) => (
         <li key={session.id} className="exercise-entry">
           <div className="exercise-entry-header">
             <strong>{session.activity_name || session.activity_type || 'Activity'}</strong>
-            <span className="text-muted">
+            <span className="text-muted entry-time-with-icon">
               {formatLocalTime(session.start_time)} – {formatLocalTime(session.end_time)}
+              <SessionHrPopup
+                userId={userId}
+                startTime={session.start_time}
+                endTime={session.end_time}
+                label={session.activity_name || session.activity_type || 'Activity'}
+              />
             </span>
           </div>
           <div className="exercise-entry-stats">
@@ -74,7 +81,7 @@ export default function Exercise({ userId, view }) {
           {data.days.length === 0 && <p>No exercise logged for this period.</p>}
           <MultiDay
             days={data.days}
-            renderDay={(day) => <DayBody key={day.date} {...day} />}
+            renderDay={(day) => <DayBody key={day.date} userId={userId} {...day} />}
             renderSummary={daySummary}
           />
         </>

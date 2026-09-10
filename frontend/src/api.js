@@ -55,6 +55,19 @@ export function getSteps(userId, view) {
   return getRangeJson('steps.php', userId, view, 'Failed to load steps')
 }
 
+// start/end are UTC "Y-m-d H:i:s" strings (e.g. an exercise session's own
+// start_time/end_time), not a date/view - this is a lookup for one exact
+// window, not a page-level range.
+export async function getHeartRateRange(userId, start, end) {
+  const params = new URLSearchParams({ user_id: userId, start, end })
+  const res = await fetch(`/api/heart-rate-range.php?${params}`)
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to load heart rate')
+  }
+  return data
+}
+
 export async function runSync(body) {
   const res = await fetch('/api/run-sync.php', {
     method: 'POST',

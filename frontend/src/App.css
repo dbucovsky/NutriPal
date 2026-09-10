@@ -215,6 +215,47 @@
   color: var(--text-muted);
 }
 
+/* Year/quarter/month group headers - just a label, so (unlike
+   day/meal headers) they keep the browser's native disclosure triangle
+   instead of needing the ::before rotation hack. */
+.year-section,
+.quarter-section,
+.month-section,
+.week-section {
+  margin-bottom: 12px;
+  padding-left: 4px;
+  border-left: 2px solid var(--border);
+}
+
+.group-section-header {
+  cursor: pointer;
+  padding: 6px 0 6px 6px;
+  font-weight: 600;
+}
+
+.year-section > .group-section-header {
+  font-size: 1.3rem;
+}
+
+.quarter-section > .group-section-header {
+  font-size: 1.15rem;
+}
+
+.month-section > .group-section-header {
+  font-size: 1.1rem;
+}
+
+.week-section > .group-section-header {
+  font-size: 1rem;
+  color: var(--text-muted);
+}
+
+.quarter-section,
+.month-section,
+.week-section {
+  margin-left: 12px;
+}
+
 .meal-section {
   margin-bottom: 20px;
 }
@@ -291,6 +332,50 @@
   margin-top: 12px;
   padding-top: 12px;
   border-top: 2px solid var(--border);
+}
+
+/* Tabular macro grid - kcal-value | "P" | value | "C" | value | "F" | value.
+   Fixed column widths (not content width) is what makes digits line up
+   across different rows/days regardless of label text length. */
+.macro-grid {
+  display: inline-grid;
+  grid-template-columns: 86px 12px 56px 12px 56px 12px 56px;
+  column-gap: 2px;
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
+
+.macro-cell-value {
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.macro-cell-label {
+  color: var(--text-muted);
+}
+
+button.macro-cell-value {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  background: none;
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+button.macro-cell-clickable:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 /* Heart rate */
@@ -438,6 +523,12 @@
   margin-bottom: 4px;
 }
 
+.entry-time-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .exercise-entry-stats {
   color: var(--text-muted);
   font-size: 0.85rem;
@@ -547,4 +638,71 @@
 .sync-progress-tail {
   max-height: 160px;
   font-size: 0.75rem;
+}
+
+/* Popup (shared modal) */
+
+.popup-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.popup-content {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  max-width: 640px;
+  width: 100%;
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.popup-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+
+.popup-close {
+  border: none;
+  background: none;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 0 4px;
+}
+
+.popup-close:hover {
+  color: var(--text);
+}
+
+/* Small inline chart-icon buttons (session HR popup trigger, food macro
+   pie-chart trigger) */
+
+.chart-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 2px 4px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.chart-icon-button:hover {
+  color: var(--accent);
+  background: var(--border);
 }

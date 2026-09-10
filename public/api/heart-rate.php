@@ -133,7 +133,7 @@ foreach ($restingStmt as $row) {
 }
 
 $exerciseStmt = $pdo->prepare(
-    "SELECT es.start_time, es.end_time, es.activity_name, at.name AS activity_type
+    "SELECT es.id, es.start_time, es.end_time, es.activity_name, at.name AS activity_type
      FROM exercise_sessions es
      LEFT JOIN lut_activity_type at ON at.id = es.activity_type_id
      WHERE es.user_id = ? AND es.start_time < ? AND (es.end_time IS NULL OR es.end_time > ?)"
@@ -182,9 +182,12 @@ foreach ($dayBounds as $i => [$localDate, $dayStart, $dayEnd]) {
         }
         $endTime = $row['end_time'] ?? $row['start_time'];
         $exercisePeriods[] = [
+            'id' => (int) $row['id'],
             'start_minute' => minutesSinceDayStart($row['start_time'], $dayStart),
             'end_minute' => minutesSinceDayStart($endTime, $dayStart),
             'label' => $row['activity_name'] ?? $row['activity_type'] ?? 'Exercise',
+            'start_time' => $row['start_time'],
+            'end_time' => $endTime,
         ];
     }
 

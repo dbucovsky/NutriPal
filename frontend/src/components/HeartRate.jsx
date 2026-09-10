@@ -9,7 +9,9 @@ import {
 import annotationPlugin from 'chartjs-plugin-annotation'
 import { Line } from 'react-chartjs-2'
 import { getHeartRate } from '../api'
+import { formatLocalTime } from '../dateUtils'
 import MultiDay from './MultiDay'
+import SessionHrPopup from './SessionHrPopup'
 
 ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, annotationPlugin)
 
@@ -45,7 +47,14 @@ function daySummary(day) {
   return `avg ${day.summary.avg_bpm} bpm · resting ${stat(day.summary.resting_bpm, ' bpm')}`
 }
 
-function DayBody({ summary, series, exercise_periods: exercisePeriods, sleep_periods: sleepPeriods, seriesIncluded }) {
+function DayBody({
+  userId,
+  summary,
+  series,
+  exercise_periods: exercisePeriods,
+  sleep_periods: sleepPeriods,
+  seriesIncluded,
+}) {
   const chartData = {
     datasets: [
       {
@@ -127,6 +136,22 @@ function DayBody({ summary, series, exercise_periods: exercisePeriods, sleep_per
       ) : (
         <p className="text-muted">Chart hidden for Month/Year/long Custom views — switch to Day or Week to see it.</p>
       )}
+
+      {exercisePeriods.length > 0 && (
+        <ul className="exercise-list">
+          {exercisePeriods.map((period) => (
+            <li key={period.id} className="exercise-entry">
+              <div className="exercise-entry-header">
+                <strong>{period.label}</strong>
+                <span className="text-muted entry-time-with-icon">
+                  {formatLocalTime(period.start_time)} – {formatLocalTime(period.end_time)}
+                  <SessionHrPopup userId={userId} startTime={period.start_time} endTime={period.end_time} label={period.label} />
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </>
   )
 }
@@ -165,7 +190,7 @@ export default function HeartRate({ userId, view }) {
           {data.days.length === 0 && <p>No heart rate readings this period.</p>}
           <MultiDay
             days={data.days}
-            renderDay={(day) => <DayBody key={day.date} {...day} seriesIncluded={data.series_included} />}
+            renderDay={(day) => <DayBody key={day.date} userId={userId} {...day} seriesIncluded={data.series_included} />}
             renderSummary={daySummary}
           />
         </>

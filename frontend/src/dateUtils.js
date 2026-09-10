@@ -128,3 +128,31 @@ export function formatRangeLabel(startDateStr, endDateStr) {
   const start = startYear === endYear ? formatMonthDay(startDateStr) : `${formatMonthDay(startDateStr)}, ${startYear}`
   return `${start} – ${formatMonthDay(endDateStr)}, ${endYear}`
 }
+
+// Grouping keys for MultiDay's hierarchical day->week->month->quarter->year
+// collapsing - plain string slicing/math, no Date object, so there's no
+// timezone footgun to worry about (a YYYY-MM-DD string's own year/month
+// digits are unambiguous regardless of the viewer's local zone).
+export function weekKey(dateStr) {
+  return startOfWeek(dateStr)
+}
+
+export function monthKey(dateStr) {
+  return dateStr.slice(0, 7)
+}
+
+export function quarterKey(dateStr) {
+  const year = dateStr.slice(0, 4)
+  const month = Number(dateStr.slice(5, 7))
+  const quarter = Math.floor((month - 1) / 3) + 1
+  return `${year}-Q${quarter}`
+}
+
+export function yearKey(dateStr) {
+  return dateStr.slice(0, 4)
+}
+
+export function formatQuarterLabel(quarterKeyStr) {
+  const [year, q] = quarterKeyStr.split('-Q')
+  return `Q${q} ${year}`
+}

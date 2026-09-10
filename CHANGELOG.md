@@ -1,5 +1,16 @@
 # Changelog
 
+## V0.6.0 — 2026-09-10 02:15
+### Changes
+- **Hierarchical day-collapsing**: multi-day views now group days into weeks, weeks into months, months into quarters, and quarters into years (`MultiDay.jsx`) instead of one flat list of day-sections — a Year view now shows 3-4 collapsed quarters instead of up to 365 day-sections. Any level that would only produce a single group for the requested range is skipped entirely, so Day/Week views stay pixel-identical to before. Applies automatically to every page that already used `MultiDay` (Food, Sleep, Exercise, Weight, Heart Rate, Steps).
+- **Exercise sessions now have a heart-rate-during-this-session popup** — a small chart-icon button next to each session opens a line chart of real bpm over elapsed minutes (0 → session duration), fetched on demand from a new `public/api/heart-rate-range.php` endpoint (raw readings for one exact time window, not a calendar-day view). The same icon+popup now also appears on the Heart Rate page itself, under each day's chart, next to the exercise periods it already overlays there as shaded bands — `heart-rate.php`'s `exercise_periods` now also carries each period's real `id`/`start_time`/`end_time` (previously only the day-chart's clipped 0-1440 minute values), needed to query and identify the right window.
+- **Food's kcal/protein/carb/fat now render in a fixed-width tabular grid** (`MacroRow`, a 7-column CSS grid: kcal-value | "P" | value | "C" | value | "F" | value) instead of inline text, so the numbers line up down the page — reused for per-entry rows, meal summaries, day summaries, and the footer totals, all sharing the same column template.
+- **Clicking a day's kcal/protein/carb/fat total pops open a pie chart** of that macro's contribution per food logged that day (grouped by name+brand, so a food logged twice in a day is one slice). Wired onto both the footer totals and the collapsed day-summary line — the latter needed explicit `stopPropagation()`/`preventDefault()` since it's nested inside a native `<summary>`, otherwise opening the popup would also toggle the day section closed.
+- New shared `Popup.jsx` (minimal modal) and `SessionHrPopup.jsx` (icon + on-demand fetch + line chart) components, reused across Exercise, Heart Rate, and (via a separate pie-specific popup) Food.
+
+### Known limitations (not addressed this pass)
+- Group-level headers (year/quarter/month) show only a label, not aggregated stats — only day-level summaries show totals. Adding aggregates at every level would need real per-page work not requested here.
+
 ## V0.5.0 — 2026-09-10 01:15
 ### Changes
 - **New Steps page** (`public/api/steps.php`, `frontend/src/components/Steps.jsx`) with a daily bar chart, plus Day/Week/Month/Year/Custom views like the other pages.
