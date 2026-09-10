@@ -10,14 +10,11 @@ import {
   yearKey,
 } from '../dateUtils'
 
-// Food-specific fork of MultiDay.jsx's hierarchy - kept separate rather
-// than further overloading the shared component, since Food's needs
-// (mixed total/average semantics per level, per-level pie scoping, a
-// toolbar-drivable *controlled* open/closed state instead of the plain
-// uncontrolled default MultiDay uses, week-number labels, meal-level
-// sub-grouping) don't apply to any of the other five pages still using
-// MultiDay as-is.
-export const LEVEL_PREFIX = { year: 'Y', quarter: 'Q', month: 'M', week: 'W', day: 'D', meal: 'Me' }
+// Heart Rate's own fork of FoodTree.jsx's hierarchy - same controlled
+// open/closed state, lazy child rendering, and week-number labels, minus
+// Food's meal sub-level (heart rate has nothing below a day). MultiDay.jsx
+// stays untouched for Sleep/Exercise/Weight/Steps.
+export const LEVEL_PREFIX = { year: 'Y', quarter: 'Q', month: 'M', week: 'W', day: 'D' }
 
 const GROUP_LEVELS = [
   { level: 'year', keyFn: yearKey, labelFn: (key) => formatYearLabel(`${key}-01-01`) },
@@ -45,7 +42,7 @@ function groupBy(days, keyFn) {
 // Builds the same year->quarter->month->week->day tree once, so both
 // rendering and key-enumeration (for the toolbar) walk identical
 // structure - a level that would only produce a single group for this
-// data is skipped entirely, exactly like MultiDay.
+// data is skipped entirely, exactly like MultiDay/FoodTree.
 export function buildTree(days) {
   function build(subset, levelIndex) {
     if (levelIndex >= GROUP_LEVELS.length) {
@@ -67,20 +64,15 @@ export function buildTree(days) {
   return build(days, 0)
 }
 
-// Every node's stable key, plus the day-level's meal sub-keys (meals are
-// rendered by FoodLog itself, not FoodTree, but the toolbar needs to know
-// they exist too). Used both to seed default open/closed state and to
-// tell the toolbar which "collapse to <level>" buttons are meaningful for
-// the data currently on screen.
+// Every node's stable key. Used both to seed default open/closed state and
+// to tell the toolbar which "collapse to <level>" buttons are meaningful
+// for the data currently on screen.
 export function enumerateNodeKeys(tree) {
   const keys = []
   function walk(nodes) {
     for (const node of nodes) {
       if (node.type === 'day') {
         keys.push({ key: `${LEVEL_PREFIX.day}:${node.date}`, level: 'day' })
-        for (const mealKey of Object.keys(node.day.meals)) {
-          keys.push({ key: `${LEVEL_PREFIX.meal}:${node.date}:${mealKey}`, level: 'meal' })
-        }
       } else {
         keys.push({ key: `${LEVEL_PREFIX[node.type]}:${node.key}`, level: node.type })
         walk(node.children)
@@ -93,10 +85,9 @@ export function enumerateNodeKeys(tree) {
 
 // year/quarter/month default closed (a year view showing 365 open day
 // sections at once isn't useful); week/day default open - same heuristic
-// MultiDay already uses. Meal defaults open too (a day's meals are meant
-// to be seen at a glance).
+// MultiDay/FoodTree already use.
 export function defaultOpenFor(level) {
-  return level === 'week' || level === 'day' || level === 'meal'
+  return level === 'week' || level === 'day'
 }
 
 function renderNodes(nodes, openState, onToggle, renderGroupSummary, renderDaySummary, renderDayBody) {
@@ -133,21 +124,15 @@ function renderNodes(nodes, openState, onToggle, renderGroupSummary, renderDaySu
   })
 }
 
-export default function FoodTree({ tree, openState, onToggle, renderGroupSummary, renderDaySummary, renderDayBody }) {
+export default function HeartRateTree({ tree, openState, onToggle, renderGroupSummary, renderDaySummary, renderDayBody }) {
   if (tree.length === 0) {
     return null
   }
   if (tree.length === 1 && tree[0].type === 'day') {
-    // Single day, no range to collapse - still show the day's own totals
-    // line (with links) above its meals, just without a pointless toggle.
-    return (
-      <>
-        <div className="daily-totals">
-          <strong>Totals:</strong> <span className="day-section-summary">{renderDaySummary(tree[0].day)}</span>
-        </div>
-        {renderDayBody(tree[0].day)}
-      </>
-    )
+    // Single day, no range to collapse - the day body renders its own
+    // stat-row already, so there's no separate "totals" line needed here
+    // (unlike Food, a lone day has nothing to summarize above itself).
+    return <>{renderDayBody(tree[0].day)}</>
   }
   return <>{renderNodes(tree, openState, onToggle, renderGroupSummary, renderDaySummary, renderDayBody)}</>
 }

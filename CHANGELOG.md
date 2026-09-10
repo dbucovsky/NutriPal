@@ -1,5 +1,18 @@
 # Changelog
 
+## V0.9.0 — 2026-09-10 07:15
+### Changes
+- **Heart Rate tab gets the Food-tab hierarchy treatment**, forking a dedicated `HeartRateTree.jsx` renderer for this page (day-only leaf, no meal-equivalent sub-level — `MultiDay.jsx` stays unchanged for Sleep/Exercise/Weight/Steps):
+  - Week/Month/Quarter/Year headers now show real averages (avg bpm, resting bpm, avg HRV) instead of just a bare label — closes the known limitation logged back in V0.6.0. Each average is clickable, opening a bar chart broken down by day (Week/Month/Quarter) or by month (Year) — a bar chart fits a continuous metric like bpm better than Food's pie (which suits a part-of-whole composition like calories).
+  - Same quick-collapse toolbar as Food (expand all / collapse all / collapse-to-year/quarter/month/week/day / reset), with inapplicable levels graying out automatically.
+  - Week headers show the real Sunday-aligned week-of-year number, same as Food, including the year-boundary "Week 52/1" style — confirmed against real data at the 2025/2026 boundary.
+  - The day-level chart no longer lists each exercise session in a `<ul>` below it — hovering a shaded exercise band now shows its activity name directly on the chart, and clicking it opens that exact session's own bpm-curve popup (the same drill-down the list's icon used to offer).
+  - Applied the lazy-child-rendering fix from day one this time (a closed `<details>` only hides content via CSS, it doesn't unmount it — this is exactly what froze Food's Year view before that fix): confirmed Heart Rate's own Year view loads instantly with everything collapsed by default.
+  - Fixed the same fixed-column-grid text-wrapping bug hit while building this (a value like "70.6 bpm" was wrapping inside its column because `.macro-cell-value` never had `white-space: nowrap` — this was silently working for Food's numbers by coincidence of length, not a real fix) — now fixed at the shared CSS rule, benefiting both pages.
+
+### Known limitations (not addressed this pass)
+- Fully expanding a full Year view via the toolbar's "Expand all" mounts every day at once and takes real time (tens of seconds) — same tradeoff already logged for Food in V0.8.0; collapsed-by-default rendering (the common case) stays fast.
+
 ## V0.8.0 — 2026-09-10 05:30
 ### Changes
 - Swapped the top-ribbon order: the menu button now comes first, with the quick-sync icon to its right.

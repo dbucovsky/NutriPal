@@ -263,7 +263,7 @@ function groupLabel(level, key) {
 // (e.g. Y/Q/M gray out on a Week view, which never produces those nodes).
 function FoodToolbar({ availableLevels, onExpandAll, onCollapseAll, onCollapseTo, onReset }) {
   return (
-    <div className="food-toolbar">
+    <div className="quick-toolbar">
       <button type="button" className="toolbar-badge" title="Expand all" onClick={onExpandAll}>
         ⤓
       </button>
