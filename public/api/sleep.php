@@ -72,6 +72,7 @@ foreach ($sessionRows as $row) {
         $stages[] = [
             'stage_type' => $stageRow['stage_type'],
             'start_time' => $stageRow['start_time'],
+            'end_time' => $stageRow['end_time'],
             'minutes' => $minutes,
         ];
         $totalsByType[$stageRow['stage_type']] = ($totalsByType[$stageRow['stage_type']] ?? 0) + $minutes;

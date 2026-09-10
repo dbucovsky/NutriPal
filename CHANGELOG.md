@@ -1,5 +1,15 @@
 # Changelog
 
+## V0.10.0 — 2026-09-10 08:30
+### Changes
+- **Sleep tab gets the same hierarchy treatment as Food/Heart Rate**: Week/Month/Quarter/Year headers now show real averages (total sleep, REM, Deep — each with the existing REM/Deep quality badge) instead of just a bare label, each clickable to open a bar chart broken down by day (Week/Month/Quarter) or by month (Year). Same quick-collapse toolbar (expand all / collapse all / collapse-to-level / reset), same real week-of-year numbers.
+- **Refactored the shared plumbing behind this instead of forking a third near-identical copy**: extracted `RangeTree.jsx` (the day-only-leaf hierarchy — controlled open state, lazy child rendering, week-number labels) out of Heart Rate's own tree file, now shared by both Heart Rate and Sleep; extracted `QuickToolbar.jsx` (the expand/collapse/reset toolbar body, which was byte-identical between Food and Heart Rate aside from their level lists) into one component taking a `levels` prop, now shared by Food, Heart Rate, and Sleep. No behavior change for Food or Heart Rate — verified both still work exactly as before.
+- **Removed the long per-stage-segment list under each sleep session's bar** (it listed every stage transition through the night — often 20-40 lines for one session) — the bar and its REM/Deep/Light/Awake totals legend stay exactly as before; the region type, start time, end time, and duration for each segment now live in that segment's own hover tooltip instead (`sleep.php` now includes each stage's `end_time`, previously fetched but not returned).
+- **Moved the REM/Deep quality tag (bad/adequate/ok/good) off the per-session graph legend and onto the totals/averages lines** (day summary, and the new Week/Month/Quarter/Year averages above) — the graph legend under each session's bar now shows plain totals only, so the color-coded call-out reads as "how are you doing overall" rather than being repeated on every individual session.
+
+### Known limitations (not addressed this pass)
+- Fully expanding a full Year view via the toolbar's "Expand all" is dramatically heavier for Sleep than the same action on Food or Heart Rate (already-logged as heavy in V0.8.0/V0.9.0) — a real night's stage data is much more fine-grained (tens of segments per session, each needing two formatted timestamps for its tooltip) than either of those pages' per-day content, and mounting a full year of it at once measured well over a minute and briefly made the tab unresponsive during testing. Collapsed-by-default rendering (every other view and action) stays fast; only the explicit full-Year-expand action is this heavy.
+
 ## V0.9.0 — 2026-09-10 07:15
 ### Changes
 - **Heart Rate tab gets the Food-tab hierarchy treatment**, forking a dedicated `HeartRateTree.jsx` renderer for this page (day-only leaf, no meal-equivalent sub-level — `MultiDay.jsx` stays unchanged for Sleep/Exercise/Weight/Steps):

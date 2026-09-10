@@ -13,6 +13,7 @@ import {
   yearKey,
 } from '../dateUtils'
 import FoodTree, { buildTree, enumerateNodeKeys, defaultOpenFor, LEVEL_PREFIX } from './FoodTree'
+import QuickToolbar from './QuickToolbar'
 import Popup from './Popup'
 
 ChartJS.register(ArcElement, ChartTooltip, Legend)
@@ -258,38 +259,6 @@ function groupLabel(level, key) {
   }
 }
 
-// Small icon-badge toolbar for the collapse/expand quick actions. Buttons
-// for a level with no matching node in the current data are disabled
-// (e.g. Y/Q/M gray out on a Week view, which never produces those nodes).
-function FoodToolbar({ availableLevels, onExpandAll, onCollapseAll, onCollapseTo, onReset }) {
-  return (
-    <div className="quick-toolbar">
-      <button type="button" className="toolbar-badge" title="Expand all" onClick={onExpandAll}>
-        ⤓
-      </button>
-      <button type="button" className="toolbar-badge" title="Collapse all" onClick={onCollapseAll}>
-        ⤒
-      </button>
-      <span className="toolbar-sep" />
-      {TOOLBAR_LEVELS.map(({ level, badge, title }) => (
-        <button
-          key={level}
-          type="button"
-          className="toolbar-badge"
-          title={title}
-          disabled={!availableLevels.has(level)}
-          onClick={() => onCollapseTo(level)}
-        >
-          {badge}
-        </button>
-      ))}
-      <span className="toolbar-sep" />
-      <button type="button" className="toolbar-badge" title="Reset to default" onClick={onReset}>
-        ↻
-      </button>
-    </div>
-  )
-}
 
 export default function FoodLog({ userId, view }) {
   const [data, setData] = useState(null)
@@ -449,7 +418,8 @@ export default function FoodLog({ userId, view }) {
 
   return (
     <div className="food-log">
-      <FoodToolbar
+      <QuickToolbar
+        levels={TOOLBAR_LEVELS}
         availableLevels={availableLevels}
         onExpandAll={handleExpandAll}
         onCollapseAll={handleCollapseAll}

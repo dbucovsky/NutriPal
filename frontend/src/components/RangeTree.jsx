@@ -10,10 +10,16 @@ import {
   yearKey,
 } from '../dateUtils'
 
-// Heart Rate's own fork of FoodTree.jsx's hierarchy - same controlled
-// open/closed state, lazy child rendering, and week-number labels, minus
-// Food's meal sub-level (heart rate has nothing below a day). MultiDay.jsx
-// stays untouched for Sleep/Exercise/Weight/Steps.
+// Shared day-only-leaf fork of FoodTree.jsx's hierarchy - a controlled
+// open/closed state (a plain object, not MultiDay's uncontrolled default),
+// lazy child rendering (a node's children only mount while it's open - a
+// closed <details> merely hides content via CSS, it doesn't unmount it,
+// which is exactly what froze Food's Year view before this was fixed), and
+// week-number labels. Used by Heart Rate and Sleep, which both need this
+// exact same year->quarter->month->week->day grouping with nothing below a
+// day; Food forked its own copy instead since it also needs a meal
+// sub-level nested under day. MultiDay.jsx stays untouched for
+// Exercise/Weight/Steps.
 export const LEVEL_PREFIX = { year: 'Y', quarter: 'Q', month: 'M', week: 'W', day: 'D' }
 
 const GROUP_LEVELS = [
@@ -124,14 +130,14 @@ function renderNodes(nodes, openState, onToggle, renderGroupSummary, renderDaySu
   })
 }
 
-export default function HeartRateTree({ tree, openState, onToggle, renderGroupSummary, renderDaySummary, renderDayBody }) {
+export default function RangeTree({ tree, openState, onToggle, renderGroupSummary, renderDaySummary, renderDayBody }) {
   if (tree.length === 0) {
     return null
   }
   if (tree.length === 1 && tree[0].type === 'day') {
     // Single day, no range to collapse - the day body renders its own
-    // stat-row already, so there's no separate "totals" line needed here
-    // (unlike Food, a lone day has nothing to summarize above itself).
+    // summary already, so there's no separate top line needed here (unlike
+    // Food, a lone day has nothing further to summarize above itself).
     return <>{renderDayBody(tree[0].day)}</>
   }
   return <>{renderNodes(tree, openState, onToggle, renderGroupSummary, renderDaySummary, renderDayBody)}</>

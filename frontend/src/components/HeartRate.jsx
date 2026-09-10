@@ -21,7 +21,8 @@ import {
   monthKey,
   yearKey,
 } from '../dateUtils'
-import HeartRateTree, { buildTree, enumerateNodeKeys } from './HeartRateTree'
+import RangeTree, { buildTree, enumerateNodeKeys } from './RangeTree'
+import QuickToolbar from './QuickToolbar'
 import Popup from './Popup'
 
 ChartJS.register(LinearScale, CategoryScale, PointElement, LineElement, BarElement, Tooltip, annotationPlugin)
@@ -389,36 +390,6 @@ function groupLabel(level, key) {
   }
 }
 
-function HeartRateToolbar({ availableLevels, onExpandAll, onCollapseAll, onCollapseTo, onReset }) {
-  return (
-    <div className="quick-toolbar">
-      <button type="button" className="toolbar-badge" title="Expand all" onClick={onExpandAll}>
-        ⤓
-      </button>
-      <button type="button" className="toolbar-badge" title="Collapse all" onClick={onCollapseAll}>
-        ⤒
-      </button>
-      <span className="toolbar-sep" />
-      {TOOLBAR_LEVELS.map(({ level, badge, title }) => (
-        <button
-          key={level}
-          type="button"
-          className="toolbar-badge"
-          title={title}
-          disabled={!availableLevels.has(level)}
-          onClick={() => onCollapseTo(level)}
-        >
-          {badge}
-        </button>
-      ))}
-      <span className="toolbar-sep" />
-      <button type="button" className="toolbar-badge" title="Reset to default" onClick={onReset}>
-        ↻
-      </button>
-    </div>
-  )
-}
-
 export default function HeartRate({ userId, view }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
@@ -518,7 +489,8 @@ export default function HeartRate({ userId, view }) {
 
   return (
     <div className="heart-rate">
-      <HeartRateToolbar
+      <QuickToolbar
+        levels={TOOLBAR_LEVELS}
         availableLevels={availableLevels}
         onExpandAll={handleExpandAll}
         onCollapseAll={handleCollapseAll}
@@ -538,7 +510,7 @@ export default function HeartRate({ userId, view }) {
               <span className="day-section-summary">{renderGroupSummary(topHeader.level, topHeader.key, data.days)}</span>
             </div>
           )}
-          <HeartRateTree
+          <RangeTree
             tree={tree}
             openState={openState}
             onToggle={handleToggle}
