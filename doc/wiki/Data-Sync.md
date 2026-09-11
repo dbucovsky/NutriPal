@@ -163,6 +163,20 @@ Fixed the display problem specifically: verified the real numeric `ExerciseSessi
 
 Verified against the real database: rebuilt, re-imported the HC export, replayed the same live sync (`--replay`, network-independent) — `SLEEP_SESSIONS: inserted=552, merged_cross_source=646, merged_conflict=14`, `EXERCISE: inserted=25, merged_cross_source=1570, merged_conflict=305`, `WEIGHT: inserted=6, skipped_cross_source=513` (no false conflicts). Confirmed in the real UI, on the exact real day this was found on: every exercise session for that day now shows calories/distance/steps/heart-rate, and Health-Connect-only sessions display "Walking"/"Running (Treadmill)" instead of raw codes.
 
+## Quick Sync gets real last-sync tracking and per-category windows (2026-09-11)
+
+Until now, the Quick Sync button (and, separately, the full Sync page's default) always ran the same flat "last 7 days" incremental sync described above, every single click, regardless of how recently it had last actually run — there was no "time since last sync" tracked anywhere. Fine for a routine periodic sync, but wasteful and imprecise for a one-click convenience button meant to be pressed often.
+
+Two new pieces of state make this precise: `login_attempts` (every login attempt, success and failure) and `users.last_sync_completed_at` (set after every successful **live** sync, never by `--replay`). `src/SyncSchedule.php` reads both to compute a new `scripts/sync-google-health.php --quick` mode's two lookback windows, both anchored on `last_sync_completed_at` rather than "now":
+
+- **Nutrition + weight (+ height, same code path as weight):** 4 days back. People log meals or weigh-ins after the fact more often than passively-sensed data goes missing for a day.
+- **Everything else** (sleep, exercise, steps, heart rate, HRV, resting HR): 4 hours back.
+- **The first quick sync after a login** gets a 7-day margin on *both* instead — in case the app sat closed for a while and nothing kept data current in the meantime. "First since login" is derived by comparing `last_sync_completed_at` against the user's most recent successful `login_attempts` row, not a separate "already synced this session" flag — that fact is already fully recoverable from the two timestamps this same change tracks, so no extra state was needed.
+
+`--quick` only changes what the Quick Sync button runs. The full Sync page's own default incremental window, `--days=N`, `--full`, and `--replay` are all completely unchanged — a deliberate manual action (the full Sync page) stays predictable rather than gaining implicit new behavior. `--replay` of a `--quick` run restores its exact original resolved windows from that run's own `manifest.json` instead of recomputing from today's (since-advanced) `last_sync_completed_at`, keeping replay's whole point — exact reproducibility — intact.
+
+Verified against the real account: a first quick sync (no `last_sync_completed_at` yet, so both windows fell back to "now − 7 days", matching the pre-existing default) pulled in genuine new data — 2,601 heart-rate readings, 47 HRV readings, 15 updated nutrition entries, 1 new sleep session, 7 steps rows. A second quick sync run immediately after correctly narrowed to "last sync − 4 days" for nutrition/weight and "last sync − 4 hours" for everything else.
+
 ## Open items
 
 - The unexplained `--full` sync from 2026-09-09 01:54 was never root-caused. If it recurs, capture the dev server's active connections/request pattern before restarting it, rather than just clearing the backlog.

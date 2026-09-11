@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 // POST /api/run-sync.php
-// Body: {"mode": "live"|"replay", "days"?: int, "full"?: bool, "replayRunId"?: string, "debug"?: bool}
+// Body: {"mode": "live"|"replay"|"quick", "days"?: int, "full"?: bool, "replayRunId"?: string, "debug"?: bool}
+// "quick" runs scripts/sync-google-health.php --quick (see its own docblock)
+// - QuickSyncButton.jsx's only mode; "days"/"full" are ignored under it.
 //
 // Runs scripts/sync-google-health.php synchronously (this request blocks
 // until the script exits) and returns its captured output. Deliberately
@@ -27,9 +29,9 @@ if (!is_array($input)) {
 }
 
 $mode = $input['mode'] ?? '';
-if (!in_array($mode, ['live', 'replay'], true)) {
+if (!in_array($mode, ['live', 'replay', 'quick'], true)) {
     http_response_code(400);
-    echo json_encode(['error' => 'mode must be "live" or "replay"']);
+    echo json_encode(['error' => 'mode must be "live", "replay", or "quick"']);
     exit;
 }
 
@@ -43,6 +45,8 @@ if ($mode === 'replay') {
         exit;
     }
     $args[] = '--replay=' . $runId;
+} elseif ($mode === 'quick') {
+    $args[] = '--quick';
 } elseif (!empty($input['full'])) {
     $args[] = '--full';
 } elseif (isset($input['days'])) {

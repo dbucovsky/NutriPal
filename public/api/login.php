@@ -8,6 +8,10 @@ declare(strict_types=1);
 // POST round-trip before more screens get built. A real auth system is
 // future work — see doc/wiki/Architecture.md.
 //
+// Every attempt (success and failure) is recorded in login_attempts -
+// src/SyncSchedule.php reads the latest successful one to decide whether
+// the next Quick Sync is the first since this login.
+//
 // POST { "email": "..." } -> 200 {id, email, name} | 404 {error}
 
 require_once __DIR__ . '/../../src/Env.php';
@@ -29,6 +33,9 @@ $pdo = Database::connect();
 $stmt = $pdo->prepare('SELECT id, email, name FROM users WHERE email = ? AND status_id = 2');
 $stmt->execute([$email]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+$pdo->prepare('INSERT INTO login_attempts (user_id, email_attempted, success) VALUES (?, ?, ?)')
+    ->execute([$user !== false ? $user['id'] : null, $email, $user !== false]);
 
 if ($user === false) {
     http_response_code(404);

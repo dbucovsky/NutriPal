@@ -9,6 +9,8 @@ declare(strict_types=1);
 //   php scripts/sync-google-health.php              (incremental: last 7 days)
 //   php scripts/sync-google-health.php --days=N      (incremental: last N days)
 //   php scripts/sync-google-health.php --full        (entire available history)
+//   php scripts/sync-google-health.php --quick       (the Quick Sync button's
+//                                                      own mode - see below)
 //   php scripts/sync-google-health.php --replay=RUN  (replay a prior run's
 //                                                      recorded API responses
 //                                                      instead of live calls)
@@ -16,6 +18,18 @@ declare(strict_types=1);
 //                                                      logging for this run)
 //   php scripts/sync-google-health.php --debug       (also trace per-record
 //                                                      processing decisions)
+//
+// --quick (src/SyncSchedule.php) uses two DIFFERENT windows instead of one
+// flat --days=N, both anchored on users.last_sync_completed_at rather than
+// "now" - nutrition and weight get a 4-day lookback (people log meals/
+// weigh-ins after the fact more often than they miss a day of passively-
+// sensed data), everything else (sleep, exercise, steps, heart rate, HRV,
+// resting HR) gets 4 hours. The FIRST --quick run after a login instead
+// gives both a 7-day margin, in case the app sat closed for a while and
+// nothing kept data current in the meantime - detected by comparing
+// last_sync_completed_at against the user's most recent successful
+// login_attempts row, not a separate "already synced this session" flag.
+// Only a real live (non-replay) run updates last_sync_completed_at.
 //
 // Every live run records the raw request/response for every API call it
 // makes to storage/api-logs/<run_id>/<endpoint>.jsonl (run_id is the same
@@ -99,11 +113,14 @@ require __DIR__ . '/../src/Env.php';
 require __DIR__ . '/../src/GoogleOAuth.php';
 require __DIR__ . '/../src/TokenStore.php';
 require __DIR__ . '/../src/Database.php';
+require __DIR__ . '/../src/SyncSchedule.php';
 
 Env::load(__DIR__ . '/../.env');
 
 $isFull = in_array('--full', $argv, true);
 $fullArgGiven = $isFull;
+$isQuick = in_array('--quick', $argv, true);
+$quickArgGiven = $isQuick;
 $days = 7;
 $daysArgGiven = false;
 $noLog = in_array('--no-log', $argv, true);
@@ -283,12 +300,19 @@ if ($replayRunId !== null) {
     if (!$fullArgGiven && isset($manifest['isFull'])) {
         $isFull = (bool) $manifest['isFull'];
     }
+    if (!$quickArgGiven && isset($manifest['isQuick'])) {
+        $isQuick = (bool) $manifest['isQuick'];
+    }
     logLine("Mode: REPLAY of run '{$replayRunId}' — no live API calls will be made");
 } elseif (!$noLog) {
     $apiLogger = new ApiLogger("{$apiLogDir}/{$runId}");
 }
 
-logLine($isFull ? "Mode: FULL resync (entire available history)" : "Mode: incremental, last {$days} day(s)");
+if ($isQuick) {
+    logLine("Mode: QUICK (Quick Sync button — per-category windows since last sync, see below)");
+} else {
+    logLine($isFull ? "Mode: FULL resync (entire available history)" : "Mode: incremental, last {$days} day(s)");
+}
 logLine("Log: {$logPath}");
 if ($debug) {
     logLine("Debug logging: ON");
@@ -320,9 +344,32 @@ logLine("Connected to MySQL database " . Env::get('DB_NAME'));
 
 $userId = 2;
 $cutoff = $isFull ? null : (new DateTimeImmutable('today', new DateTimeZone('UTC')))->modify("-{$days} days");
+$cutoffFoodWeight = $cutoff;
+
+if ($isQuick) {
+    if ($replayRunId !== null && isset($manifest['quickCutoff'], $manifest['quickCutoffFoodWeight'])) {
+        // Reproduce the exact windows the original run used, rather than
+        // recomputing from today's (since-advanced) last_sync_completed_at
+        // — the whole point of --replay is exact reproducibility.
+        $cutoff = new DateTimeImmutable($manifest['quickCutoff'], new DateTimeZone('UTC'));
+        $cutoffFoodWeight = new DateTimeImmutable($manifest['quickCutoffFoodWeight'], new DateTimeZone('UTC'));
+    } else {
+        $quickCutoffs = SyncSchedule::quickSyncCutoffs($pdo, $userId);
+        $cutoff = $quickCutoffs['other'];
+        $cutoffFoodWeight = $quickCutoffs['food_weight'];
+    }
+    logLine("Quick windows — nutrition/weight since {$cutoffFoodWeight->format('Y-m-d H:i:s')} UTC, everything else since {$cutoff->format('Y-m-d H:i:s')} UTC");
+}
 
 if ($apiLogger !== null) {
-    $apiLogger->writeManifest(['isFull' => $isFull, 'days' => $days, 'startedAt' => date('c')]);
+    $apiLogger->writeManifest([
+        'isFull' => $isFull,
+        'days' => $days,
+        'isQuick' => $isQuick,
+        'quickCutoff' => $isQuick ? $cutoff->format('c') : null,
+        'quickCutoffFoodWeight' => $isQuick ? $cutoffFoodWeight->format('c') : null,
+        'startedAt' => date('c'),
+    ]);
 }
 
 // ----------------------------------------------------------------------------
@@ -1559,15 +1606,25 @@ function syncInsertMissingSeries(string $accessToken, PDO $pdo, string $dataType
 // Run
 // ----------------------------------------------------------------------------
 
-syncNutrition($accessToken, $pdo, $userId, $ingestionSourceApi, $ingestionSourceMixed, $massDimensionId, $gramUnitId, $mealTypeIds, $nutrientIds, $dataSourceIds, $insertDataSource, $cutoff);
+// Nutrition/weight/height use $cutoffFoodWeight - identical to $cutoff
+// outside --quick mode, but a separate (longer) window under it, since
+// people log meals/weigh-ins after the fact more often than they miss a
+// day of passively-sensed data (see --quick's own docblock note above).
+syncNutrition($accessToken, $pdo, $userId, $ingestionSourceApi, $ingestionSourceMixed, $massDimensionId, $gramUnitId, $mealTypeIds, $nutrientIds, $dataSourceIds, $insertDataSource, $cutoffFoodWeight);
 syncSleep($accessToken, $pdo, $userId, $ingestionSourceApi, $ingestionSourceMixed, $sleepTypeIds, $sleepStageTypeIds, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
 syncExercise($accessToken, $pdo, $userId, $ingestionSourceApi, $ingestionSourceMixed, $meterUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $activityTypeIds, $insertActivityType, $cutoff);
-syncMeasurement($accessToken, $pdo, 'weight', 'weight', 'weightGrams', $userId, $ingestionSourceApi, $ingestionSourceMixed, $measurementTypeIds['weight'], $gramUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
-syncMeasurement($accessToken, $pdo, 'height', 'height', 'heightMillimeters', $userId, $ingestionSourceApi, $ingestionSourceMixed, $measurementTypeIds['height'], $mmUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
+syncMeasurement($accessToken, $pdo, 'weight', 'weight', 'weightGrams', $userId, $ingestionSourceApi, $ingestionSourceMixed, $measurementTypeIds['weight'], $gramUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoffFoodWeight);
+syncMeasurement($accessToken, $pdo, 'height', 'height', 'heightMillimeters', $userId, $ingestionSourceApi, $ingestionSourceMixed, $measurementTypeIds['height'], $mmUnitId, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoffFoodWeight);
 syncDailyRestingHeartRate($accessToken, $pdo, $userId, $ingestionSourceApi, $recordingMethodIds, $calcMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
 syncInsertMissingSeries($accessToken, $pdo, 'steps', 'steps', 'steps_readings', 'count', 'steps', $userId, $ingestionSourceApi, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
 syncInsertMissingSeries($accessToken, $pdo, 'heart-rate', 'heartRate', 'heart_rate_readings', 'beatsPerMinute', 'bpm', $userId, $ingestionSourceApi, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
 syncInsertMissingSeries($accessToken, $pdo, 'heart-rate-variability', 'heartRateVariability', 'heart_rate_variability_readings', 'rootMeanSquareOfSuccessiveDifferencesMilliseconds', 'rmssd_ms', $userId, $ingestionSourceApi, $recordingMethodIds, $dataSourceIds, $insertDataSource, $cutoff);
+
+if ($replayRunId === null) {
+    // Only a real live run advances the clock --quick's own windowing
+    // reads from - replaying old recorded data doesn't fetch anything new.
+    SyncSchedule::recordSyncCompleted($pdo, $userId);
+}
 
 $elapsed = round(microtime(true) - $startedAt, 1);
 logLine("=== Sync complete in {$elapsed}s ===");

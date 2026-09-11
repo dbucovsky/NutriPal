@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { runSync } from '../api'
 
-// One click, no options - runs the exact same default incremental live
-// sync (no --days/--full override, the fixed 7-day lookback window
-// scripts/sync-google-health.php already treats as its normal "routine
-// sync" mode) that the full Sync page's own "Live sync" button runs by
-// default. There's no true "time of last successful sync" tracked in this
-// app - this fixed window, with its already-built dedup/cross-source
-// rules, IS the established "since last sync" behavior today. The full
-// Sync page (menu -> Sync) is still there for anyone who wants --full,
-// --days=N, a replay, or the detailed output log.
+// One click, no options - runs mode: 'quick' (scripts/sync-google-health.php
+// --quick, see its own docblock), which windows each category off
+// users.last_sync_completed_at instead of a flat "last 7 days" every time -
+// nutrition/weight get a 4-day lookback, everything else 4 hours, widened
+// to 7 days across the board for the first quick sync after a login. The
+// full Sync page (menu -> Sync) is still there for anyone who wants --full,
+// --days=N, a replay, or the detailed output log - that page's own default
+// "Live sync" button is untouched by this and still runs the old flat
+// incremental window.
 export default function QuickSyncButton() {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState(null) // { ok: boolean, message: string } | null
@@ -23,7 +23,7 @@ export default function QuickSyncButton() {
     setStatus(null)
     clearTimeout(timeoutRef.current)
     try {
-      const result = await runSync({ mode: 'live' })
+      const result = await runSync({ mode: 'quick' })
       setStatus(result.success ? { ok: true, message: 'Synced' } : { ok: false, message: `Sync failed (exit ${result.exitCode})` })
     } catch (err) {
       setStatus({ ok: false, message: err.message })

@@ -528,6 +528,12 @@ CREATE TABLE users (
     -- so a future change to the app's own default doesn't silently relabel
     -- a user who never touched this setting.
     steps_goal INT UNSIGNED NULL,
+    -- Set after the last successful LIVE sync completes (never by --replay,
+    -- which re-processes old recorded data rather than fetching anything
+    -- new). Drives --quick's own windowing in scripts/sync-google-health.php
+    -- - see src/SyncSchedule.php - rather than the fixed 7-day window every
+    -- Quick Sync click used before this existed.
+    last_sync_completed_at TIMESTAMP NULL,
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
@@ -550,10 +556,29 @@ CREATE TABLE nutripal_hist.users_hist (
     gender_id BIGINT UNSIGNED NULL,
     max_hr_source_id BIGINT UNSIGNED NULL,
     steps_goal INT UNSIGNED NULL,
+    last_sync_completed_at TIMESTAMP NULL,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
     KEY idx_users_hist_id (id)
+) ENGINE=InnoDB;
+
+-- Every login attempt, success and failure - append-only, like
+-- max_heart_rate_history: nothing here is ever corrected in place (a typo'd
+-- email that failed stays a failed attempt forever), so no _hist companion,
+-- just the standard BEFORE DELETE blocker for this schema's "nothing is
+-- ever destroyed" rule. user_id is NULL for an attempt whose email never
+-- matched a real account - there's no user to attribute it to yet.
+CREATE TABLE login_attempts (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NULL,
+    email_attempted VARCHAR(255) NOT NULL,
+    success BOOLEAN NOT NULL,
+    created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    changed_by VARCHAR(255) NULL,
+    changed_by_user_id BIGINT UNSIGNED NULL,
+    KEY idx_login_attempts_user (user_id, created_ts),
+    CONSTRAINT fk_login_attempts_user FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB;
 
 -- id=1 is a reserved sentinel ("no group"), real groups start at id=2.
@@ -1754,14 +1779,18 @@ CREATE TRIGGER trg_faq_entries_bd BEFORE DELETE ON faq_entries FOR EACH ROW BEGI
 END$$
 
 CREATE TRIGGER trg_users_bu BEFORE UPDATE ON users FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.users_hist (id, valid_start_ts, valid_end_ts, email, name, status_id, birth_date, gender_id, max_hr_source_id, steps_goal, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.email, OLD.name, OLD.status_id, OLD.birth_date, OLD.gender_id, OLD.max_hr_source_id, OLD.steps_goal, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.users_hist (id, valid_start_ts, valid_end_ts, email, name, status_id, birth_date, gender_id, max_hr_source_id, steps_goal, last_sync_completed_at, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.email, OLD.name, OLD.status_id, OLD.birth_date, OLD.gender_id, OLD.max_hr_source_id, OLD.steps_goal, OLD.last_sync_completed_at, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();
 END$$
 CREATE TRIGGER trg_users_bd BEFORE DELETE ON users FOR EACH ROW BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Delete is not allowed on users; change status instead.';
+END$$
+
+CREATE TRIGGER trg_login_attempts_bd BEFORE DELETE ON login_attempts FOR EACH ROW BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Delete is not allowed on login_attempts.';
 END$$
 
 CREATE TRIGGER trg_groups_bu BEFORE UPDATE ON groups FOR EACH ROW BEGIN
