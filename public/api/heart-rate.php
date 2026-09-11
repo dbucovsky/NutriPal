@@ -38,6 +38,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../../src/Env.php';
 require_once __DIR__ . '/../../src/Database.php';
 require_once __DIR__ . '/../../src/LocalDay.php';
+require_once __DIR__ . '/../../src/MaxHeartRate.php';
 
 Env::load(__DIR__ . '/../../.env');
 header('Content-Type: application/json');
@@ -235,6 +236,23 @@ foreach ($dayBounds as $i => [$localDate, $dayStart, $dayEnd]) {
         'sleep_periods' => $sleepPeriods,
     ];
 }
+
+// Max HR is only needed here for zone-coloring the exercise-session popup
+// chart (clicking a shaded band on this page's own day chart) - resolved
+// per-day, as of that specific date, the same historically-accurate way
+// exercise.php does it (see src/MaxHeartRate.php). Only computed for days
+// that actually have an exercise period, since most days here won't.
+$datesNeedingMaxHr = [];
+foreach ($days as $day) {
+    if ($day['exercise_periods'] !== []) {
+        $datesNeedingMaxHr[] = $day['date'];
+    }
+}
+$maxHrByDate = MaxHeartRate::getEffectiveForDates($pdo, $userId, $datesNeedingMaxHr, $timezone);
+foreach ($days as &$day) {
+    $day['max_heart_rate'] = $maxHrByDate[$day['date']]['value'] ?? null;
+}
+unset($day);
 
 echo json_encode([
     'view' => $view,

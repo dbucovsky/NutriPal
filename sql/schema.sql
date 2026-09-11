@@ -441,22 +441,94 @@ CREATE TABLE nutripal_hist.lut_sleep_type_hist (
     KEY idx_lut_sleep_type_hist_id (id)
 ) ENGINE=InnoDB;
 
+-- Profile-only vocabulary - not currently consumed by any Max-HR/BMR/etc.
+-- formula (the 220-age estimate is age-only), just captured on the user's
+-- profile for whatever future use needs it.
+CREATE TABLE lut_gender (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(64) NOT NULL,
+    description VARCHAR(255) NULL,
+    is_obsolete BOOLEAN NOT NULL DEFAULT FALSE,
+    db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    changed_by VARCHAR(255) NULL,
+    changed_by_user_id BIGINT UNSIGNED NULL,
+    UNIQUE KEY uq_lut_gender_name (name)
+) ENGINE=InnoDB;
+
+CREATE TABLE nutripal_hist.lut_gender_hist (
+    id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id BIGINT UNSIGNED NOT NULL,
+    valid_start_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    valid_end_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    name VARCHAR(64) NOT NULL,
+    description VARCHAR(255) NULL,
+    is_obsolete BOOLEAN NOT NULL,
+    created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    changed_by VARCHAR(255) NULL,
+    changed_by_user_id BIGINT UNSIGNED NULL,
+    KEY idx_lut_gender_hist_id (id)
+) ENGINE=InnoDB;
+
+-- Which of the three independently-tracked Max HR sources (age estimate /
+-- observed-from-sessions / manual override - see max_heart_rate_history and
+-- exercise_sessions.observed_max_hr_estimate) is the one actually used for
+-- zone coloring right now. A user preference, not a priority order - all
+-- three keep being computed/stored regardless of which is "active".
+CREATE TABLE lut_max_hr_source (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(64) NOT NULL,
+    description VARCHAR(255) NULL,
+    is_obsolete BOOLEAN NOT NULL DEFAULT FALSE,
+    db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    changed_by VARCHAR(255) NULL,
+    changed_by_user_id BIGINT UNSIGNED NULL,
+    UNIQUE KEY uq_lut_max_hr_source_name (name)
+) ENGINE=InnoDB;
+
+CREATE TABLE nutripal_hist.lut_max_hr_source_hist (
+    id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id BIGINT UNSIGNED NOT NULL,
+    valid_start_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    valid_end_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    name VARCHAR(64) NOT NULL,
+    description VARCHAR(255) NULL,
+    is_obsolete BOOLEAN NOT NULL,
+    created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    changed_by VARCHAR(255) NULL,
+    changed_by_user_id BIGINT UNSIGNED NULL,
+    KEY idx_lut_max_hr_source_hist_id (id)
+) ENGINE=InnoDB;
+
 -- ----------------------------------------------------------------------------
 -- Multi-user readiness (schema shape only — no auth/registration UX yet)
 -- ----------------------------------------------------------------------------
 
 -- id=1 is a reserved sentinel ("no user" / "system"), never a real account.
 -- Real users start at id=2. Exactly one real row is seeded for now.
+-- birth_date/gender_id are profile fields, both nullable since neither is
+-- collected at signup today - birth_date backs the Max HR estimate (see
+-- max_heart_rate_history below), gender_id is otherwise unused for now.
+-- max_hr_source_id is NULL until the user picks one in Settings, defaulting
+-- to "age" in application logic until then.
 CREATE TABLE users (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     email VARCHAR(255) NULL,
     name VARCHAR(255) NULL,
     status_id BIGINT UNSIGNED NOT NULL,
+    birth_date DATE NULL,
+    gender_id BIGINT UNSIGNED NULL,
+    max_hr_source_id BIGINT UNSIGNED NULL,
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
-    CONSTRAINT fk_users_status FOREIGN KEY (status_id) REFERENCES lut_status(id)
+    CONSTRAINT fk_users_status FOREIGN KEY (status_id) REFERENCES lut_status(id),
+    CONSTRAINT fk_users_gender FOREIGN KEY (gender_id) REFERENCES lut_gender(id),
+    CONSTRAINT fk_users_max_hr_source FOREIGN KEY (max_hr_source_id) REFERENCES lut_max_hr_source(id)
 ) ENGINE=InnoDB;
 
 CREATE TABLE nutripal_hist.users_hist (
@@ -468,6 +540,9 @@ CREATE TABLE nutripal_hist.users_hist (
     email VARCHAR(255) NULL,
     name VARCHAR(255) NULL,
     status_id BIGINT UNSIGNED NOT NULL,
+    birth_date DATE NULL,
+    gender_id BIGINT UNSIGNED NULL,
+    max_hr_source_id BIGINT UNSIGNED NULL,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
@@ -1098,6 +1173,63 @@ CREATE TABLE nutripal_hist.daily_resting_heart_rate_hist (
     KEY idx_daily_resting_heart_rate_hist_id (id)
 ) ENGINE=InnoDB;
 
+-- Every Max HR value this user has ever had, in order - NOT a "current
+-- value that gets corrected in place" table like daily_resting_heart_rate
+-- above (nothing here is ever UPDATEd), so there's no _hist companion: each
+-- birthday's automatic 220-age recompute, and each manual override, is a
+-- new fact appended as its own row, never touching earlier ones. "Current"
+-- = the row with the latest effective_date. See src/MaxHeartRate.php for
+-- the read/recompute logic (no cron job - it lazily checks and inserts a
+-- fresh computed row on read, whenever a birthday has passed since the
+-- last non-override row).
+CREATE TABLE max_heart_rate_history (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL,
+    effective_date DATE NOT NULL,
+    bpm SMALLINT UNSIGNED NOT NULL,
+    is_manual_override BOOLEAN NOT NULL DEFAULT FALSE,
+    created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    changed_by VARCHAR(255) NULL,
+    changed_by_user_id BIGINT UNSIGNED NULL,
+    UNIQUE KEY uq_max_heart_rate_history_user_date (user_id, effective_date),
+    CONSTRAINT fk_max_heart_rate_history_user FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB;
+
+-- App-level content, not user health data - one row per FAQ entry, shown on
+-- the standalone FAQ page (frontend/faq.html) reached from the menu's
+-- Help submenu. question/answer are Markdown (rendered client-side via
+-- `marked`), not raw HTML - simpler to hand-author/edit directly in the DB
+-- and avoids trusting stored HTML. display_order is a plain sort key, not a
+-- date/priority; is_obsolete lets an entry be retired without a destructive
+-- delete, consistent with this schema's "nothing is ever destroyed" rule.
+CREATE TABLE faq_entries (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    display_order INT NOT NULL DEFAULT 0,
+    is_obsolete BOOLEAN NOT NULL DEFAULT FALSE,
+    db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    changed_by VARCHAR(255) NULL,
+    changed_by_user_id BIGINT UNSIGNED NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE nutripal_hist.faq_entries_hist (
+    id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id BIGINT UNSIGNED NOT NULL,
+    valid_start_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    valid_end_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    display_order INT NOT NULL,
+    is_obsolete BOOLEAN NOT NULL,
+    created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    changed_by VARCHAR(255) NULL,
+    changed_by_user_id BIGINT UNSIGNED NULL,
+    KEY idx_faq_entries_hist_id (id)
+) ENGINE=InnoDB;
+
 -- Generic point-in-time scalar body metric (weight, height, blood pressure
 -- systolic/diastolic, body fat %, etc.) — one row per (user, type, time).
 -- Deliberately generalized instead of one table per metric (like
@@ -1200,6 +1332,14 @@ CREATE TABLE exercise_sessions (
     distance_unit_id BIGINT UNSIGNED NULL,
     steps INT UNSIGNED NULL,
     average_heart_rate SMALLINT UNSIGNED NULL,
+    -- This session's own peak bpm (from heart_rate_readings, over this
+    -- session's exact time window) divided by 0.95 - only ever populated
+    -- for a running/treadmill/aerobics-type activity (see
+    -- src/MaxHeartRate.php's QUALIFYING_ACTIVITY_TYPES), and only once
+    -- heart-rate data for that window actually exists, which may be after
+    -- this row itself was inserted - filled in lazily on read, not at
+    -- insert time (see src/MaxHeartRate.php's own comment for why).
+    observed_max_hr_estimate SMALLINT UNSIGNED NULL,
     has_gps BOOLEAN NOT NULL DEFAULT FALSE,
     data_source_id BIGINT UNSIGNED NULL,
     recording_method_id BIGINT UNSIGNED NULL,
@@ -1245,6 +1385,7 @@ CREATE TABLE nutripal_hist.exercise_sessions_hist (
     distance_unit_id BIGINT UNSIGNED NULL,
     steps INT UNSIGNED NULL,
     average_heart_rate SMALLINT UNSIGNED NULL,
+    observed_max_hr_estimate SMALLINT UNSIGNED NULL,
     has_gps BOOLEAN NOT NULL,
     data_source_id BIGINT UNSIGNED NULL,
     recording_method_id BIGINT UNSIGNED NULL,
@@ -1523,9 +1664,42 @@ CREATE TRIGGER trg_lut_sleep_type_bd BEFORE DELETE ON lut_sleep_type FOR EACH RO
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Delete is not allowed on lut_sleep_type; change status instead.';
 END$$
 
+CREATE TRIGGER trg_lut_gender_bu BEFORE UPDATE ON lut_gender FOR EACH ROW BEGIN
+    INSERT INTO nutripal_hist.lut_gender_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.description, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    SET NEW.id = OLD.id;
+    SET NEW.created_ts = OLD.created_ts;
+    SET NEW.db_ts = NOW();
+END$$
+CREATE TRIGGER trg_lut_gender_bd BEFORE DELETE ON lut_gender FOR EACH ROW BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Delete is not allowed on lut_gender; change status instead.';
+END$$
+
+CREATE TRIGGER trg_lut_max_hr_source_bu BEFORE UPDATE ON lut_max_hr_source FOR EACH ROW BEGIN
+    INSERT INTO nutripal_hist.lut_max_hr_source_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.description, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    SET NEW.id = OLD.id;
+    SET NEW.created_ts = OLD.created_ts;
+    SET NEW.db_ts = NOW();
+END$$
+CREATE TRIGGER trg_lut_max_hr_source_bd BEFORE DELETE ON lut_max_hr_source FOR EACH ROW BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Delete is not allowed on lut_max_hr_source; change status instead.';
+END$$
+
+CREATE TRIGGER trg_faq_entries_bu BEFORE UPDATE ON faq_entries FOR EACH ROW BEGIN
+    INSERT INTO nutripal_hist.faq_entries_hist (id, valid_start_ts, valid_end_ts, question, answer, display_order, is_obsolete, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.question, OLD.answer, OLD.display_order, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    SET NEW.id = OLD.id;
+    SET NEW.created_ts = OLD.created_ts;
+    SET NEW.db_ts = NOW();
+END$$
+CREATE TRIGGER trg_faq_entries_bd BEFORE DELETE ON faq_entries FOR EACH ROW BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Delete is not allowed on faq_entries; change status instead.';
+END$$
+
 CREATE TRIGGER trg_users_bu BEFORE UPDATE ON users FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.users_hist (id, valid_start_ts, valid_end_ts, email, name, status_id, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.email, OLD.name, OLD.status_id, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.users_hist (id, valid_start_ts, valid_end_ts, email, name, status_id, birth_date, gender_id, max_hr_source_id, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.email, OLD.name, OLD.status_id, OLD.birth_date, OLD.gender_id, OLD.max_hr_source_id, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();
@@ -1680,6 +1854,14 @@ CREATE TRIGGER trg_daily_resting_heart_rate_bd BEFORE DELETE ON daily_resting_he
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Delete is not allowed on daily_resting_heart_rate.';
 END$$
 
+-- No BEFORE UPDATE trigger - the app never issues UPDATE against this
+-- table (every change is a new row), so there's nothing to copy into a
+-- hist table. The DELETE blocker still applies for the same "nothing is
+-- ever destroyed" reason as everywhere else in this schema.
+CREATE TRIGGER trg_max_heart_rate_history_bd BEFORE DELETE ON max_heart_rate_history FOR EACH ROW BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Delete is not allowed on max_heart_rate_history.';
+END$$
+
 CREATE TRIGGER trg_measurements_bu BEFORE UPDATE ON measurements FOR EACH ROW BEGIN
     INSERT INTO nutripal_hist.measurements_hist (id, valid_start_ts, valid_end_ts, user_id, measurement_type_id, reading_time, value, unit_id, data_source_id, recording_method_id, ingestion_source_id, api_uid, created_ts, changed_by, changed_by_user_id)
     VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.measurement_type_id, OLD.reading_time, OLD.value, OLD.unit_id, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
@@ -1692,8 +1874,8 @@ CREATE TRIGGER trg_measurements_bd BEFORE DELETE ON measurements FOR EACH ROW BE
 END$$
 
 CREATE TRIGGER trg_exercise_sessions_bu BEFORE UPDATE ON exercise_sessions FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.exercise_sessions_hist (id, valid_start_ts, valid_end_ts, user_id, start_time, end_time, activity_name, activity_type_id, duration_ms, active_duration_ms, calories, distance, distance_unit_id, steps, average_heart_rate, has_gps, data_source_id, recording_method_id, ingestion_source_id, api_uid, raw_details, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.start_time, OLD.end_time, OLD.activity_name, OLD.activity_type_id, OLD.duration_ms, OLD.active_duration_ms, OLD.calories, OLD.distance, OLD.distance_unit_id, OLD.steps, OLD.average_heart_rate, OLD.has_gps, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.raw_details, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.exercise_sessions_hist (id, valid_start_ts, valid_end_ts, user_id, start_time, end_time, activity_name, activity_type_id, duration_ms, active_duration_ms, calories, distance, distance_unit_id, steps, average_heart_rate, observed_max_hr_estimate, has_gps, data_source_id, recording_method_id, ingestion_source_id, api_uid, raw_details, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.user_id, OLD.start_time, OLD.end_time, OLD.activity_name, OLD.activity_type_id, OLD.duration_ms, OLD.active_duration_ms, OLD.calories, OLD.distance, OLD.distance_unit_id, OLD.steps, OLD.average_heart_rate, OLD.observed_max_hr_estimate, OLD.has_gps, OLD.data_source_id, OLD.recording_method_id, OLD.ingestion_source_id, OLD.api_uid, OLD.raw_details, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();

@@ -18,7 +18,7 @@ import './App.css'
 const STORAGE_KEY = 'nutripal.currentUser'
 
 const TABS = [
-  { key: 'food', label: 'Food', Component: FoodLog },
+  { key: 'food', label: 'Nutrition', Component: FoodLog },
   { key: 'heart-rate', label: 'Heart Rate', Component: HeartRate },
   { key: 'sleep', label: 'Sleep', Component: Sleep },
   { key: 'exercise', label: 'Exercise', Component: Exercise },
@@ -34,12 +34,12 @@ const PANEL_TITLES = {
   about: 'About',
 }
 
-function renderPanel(panel) {
+function renderPanel(panel, userId) {
   switch (panel) {
     case 'sync':
       return <Sync />
     case 'settings':
-      return <SettingsPanel />
+      return <SettingsPanel userId={userId} />
     case 'help':
       return <HelpPanel />
     case 'about':
@@ -110,7 +110,7 @@ function App() {
 
       {openPanel && (
         <Popup title={PANEL_TITLES[openPanel]} onClose={() => setOpenPanel(null)}>
-          {renderPanel(openPanel)}
+          {renderPanel(openPanel, currentUser.id)}
         </Popup>
       )}
     </div>

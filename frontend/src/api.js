@@ -98,6 +98,15 @@ export async function getSyncProgress(type) {
   return res.json()
 }
 
+export async function getFaq() {
+  const res = await fetch('/api/faq.php')
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to load FAQ')
+  }
+  return data
+}
+
 export async function getAppVersion() {
   const res = await fetch('/api/version.php')
   const data = await res.json()
@@ -105,6 +114,30 @@ export async function getAppVersion() {
     throw new Error(data.error || 'Failed to load version')
   }
   return data.version
+}
+
+export async function getProfile(userId) {
+  const res = await fetch(`/api/profile.php?user_id=${userId}`)
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to load profile')
+  }
+  return data
+}
+
+// `patch` may include any of birth_date, gender_id, max_heart_rate_override,
+// reset_max_heart_rate - only the fields present are changed server-side.
+export async function updateProfile(userId, patch) {
+  const res = await fetch('/api/profile.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, ...patch }),
+  })
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to update profile')
+  }
+  return data
 }
 
 export async function importHealthConnect(path) {

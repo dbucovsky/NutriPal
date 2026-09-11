@@ -18,7 +18,7 @@ import Popup from './Popup'
 
 ChartJS.register(ArcElement, ChartTooltip, Legend)
 
-const MEAL_ORDER = ['BREAKFAST', 'LUNCH', 'DINNER', 'EARLY_SNACK', 'MORNING_SNACK', 'AFTERNOON_SNACK', 'LATE_NIGHT_SNACK']
+const MEAL_ORDER = ['EARLY_SNACK', 'BREAKFAST', 'MORNING_SNACK', 'LUNCH', 'AFTERNOON_SNACK', 'DINNER', 'LATE_NIGHT_SNACK']
 const MEAL_LABELS = {
   BREAKFAST: 'Breakfast',
   LUNCH: 'Lunch',

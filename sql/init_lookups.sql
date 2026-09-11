@@ -109,6 +109,12 @@ INSERT INTO lut_recording_method (id, name, description) VALUES
 INSERT INTO lut_sleep_type (id, name) VALUES
     (1, 'CLASSIC'), (2, 'STAGES');
 
+INSERT INTO lut_gender (id, name) VALUES
+    (1, 'male'), (2, 'female'), (3, 'unspecified');
+
+INSERT INTO lut_max_hr_source (id, name) VALUES
+    (1, 'age'), (2, 'observed'), (3, 'manual');
+
 -- AWAKE/LIGHT/DEEP/REM cover the newer STAGES sleep-tracking model;
 -- ASLEEP/RESTLESS/UNSPECIFIED are the older, coarser CLASSIC-mode
 -- vocabulary (older/less capable trackers) — confirmed present in real

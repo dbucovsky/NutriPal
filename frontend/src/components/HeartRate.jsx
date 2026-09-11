@@ -24,12 +24,21 @@ import {
 import RangeTree, { buildTree, enumerateNodeKeys } from './RangeTree'
 import QuickToolbar from './QuickToolbar'
 import Popup from './Popup'
+import ZoneLegend from './ZoneLegend'
+import { zoneBandAnnotations } from '../hrZones'
 
 ChartJS.register(LinearScale, CategoryScale, PointElement, LineElement, BarElement, Tooltip, annotationPlugin)
 
 const EXERCISE_COLOR = 'rgba(217, 130, 43, 0.18)'
 const SLEEP_COLOR = 'rgba(47, 95, 143, 0.15)'
 const BAR_COLOR = '#2f7d4f'
+
+// A single neutral line color for the exercise-session popup chart below
+// (never the day's own full chart, which keeps its own plain green) - not
+// one of the zone colors themselves, since zones are shown as background
+// bands behind the line (see zoneBandAnnotations) and green would double as
+// both "the line" and "Zone 2".
+const SESSION_LINE_COLOR = '#26314a'
 
 const METRIC_LABELS = {
   avg_bpm: 'Avg bpm',
@@ -258,10 +267,10 @@ function SessionPopup({ userId, period, onClose }) {
       {
         label: 'bpm',
         data: points,
-        borderColor: '#2f7d4f',
-        backgroundColor: '#2f7d4f',
+        borderColor: SESSION_LINE_COLOR,
+        backgroundColor: SESSION_LINE_COLOR,
         pointRadius: 0,
-        borderWidth: 1.5,
+        borderWidth: 2,
         tension: 0.3,
       },
     ],
@@ -269,7 +278,10 @@ function SessionPopup({ userId, period, onClose }) {
 
   const chartOptions = {
     responsive: true,
-    plugins: { legend: { display: false } },
+    plugins: {
+      legend: { display: false },
+      annotation: { annotations: period.maxHr ? zoneBandAnnotations(period.maxHr) : {} },
+    },
     scales: {
       x: { type: 'linear', title: { display: true, text: 'minutes' } },
       y: { title: { display: true, text: 'bpm' } },
@@ -282,19 +294,59 @@ function SessionPopup({ userId, period, onClose }) {
       {error && <p className="login-error">{error}</p>}
       {data && !loading && (
         <div className="chart-wrap">
-          {points.length > 0 ? <Line data={chartData} options={chartOptions} /> : <p>No heart rate readings during this session.</p>}
+          {points.length > 0 ? (
+            <>
+              <Line data={chartData} options={chartOptions} />
+              {period.maxHr && <ZoneLegend maxHr={period.maxHr} />}
+            </>
+          ) : (
+            <p>No heart rate readings during this session.</p>
+          )}
         </div>
       )}
     </Popup>
   )
 }
 
-function DayBody({ summary, series, exercise_periods: exercisePeriods, sleep_periods: sleepPeriods, seriesIncluded, onOpenSession }) {
+function DayBody({
+  userId,
+  date,
+  summary,
+  series,
+  exercise_periods: exercisePeriods,
+  sleep_periods: sleepPeriods,
+  max_heart_rate: maxHr,
+  seriesIncluded,
+  onOpenSession,
+}) {
+  // Month/Year/long-Custom views never fetch every day's chart series
+  // upfront (see heart-rate.php's MAX_SERIES_DAYS) - too many days, too much
+  // data nobody will look at. Instead of just saying so, a button lets the
+  // user fetch THIS one day's series on demand (a plain view=day request -
+  // the same endpoint/shape a Day view already gets), so opening one chart
+  // never costs fetching the whole range's worth.
+  const [manualSeries, setManualSeries] = useState(null)
+  const [loadingSeries, setLoadingSeries] = useState(false)
+  const [seriesError, setSeriesError] = useState(null)
+
+  function handleShowChart() {
+    setLoadingSeries(true)
+    setSeriesError(null)
+    getHeartRate(userId, { type: 'day', date })
+      .then((result) => {
+        setManualSeries(result.days[0] ? result.days[0].series : [])
+      })
+      .catch((err) => setSeriesError(err.message))
+      .finally(() => setLoadingSeries(false))
+  }
+
+  const effectiveSeries = series.length > 0 ? series : manualSeries || []
+
   const chartData = {
     datasets: [
       {
         label: 'bpm',
-        data: series.map((p) => ({ x: p.minute, y: p.avg_bpm })),
+        data: effectiveSeries.map((p) => ({ x: p.minute, y: p.avg_bpm })),
         borderColor: '#2f7d4f',
         backgroundColor: '#2f7d4f',
         pointRadius: 0,
@@ -311,7 +363,7 @@ function DayBody({ summary, series, exercise_periods: exercisePeriods, sleep_per
       annotation: {
         annotations: {
           ...sleepAnnotations(sleepPeriods),
-          ...exerciseAnnotations(exercisePeriods, onOpenSession),
+          ...exerciseAnnotations(exercisePeriods, (period) => onOpenSession(period, maxHr)),
         },
       },
     },
@@ -362,14 +414,19 @@ function DayBody({ summary, series, exercise_periods: exercisePeriods, sleep_per
         </div>
       )}
 
-      {series.length > 0 ? (
+      {effectiveSeries.length > 0 ? (
         <div className="chart-wrap">
           <Line data={chartData} options={chartOptions} />
         </div>
-      ) : seriesIncluded ? (
+      ) : seriesIncluded || manualSeries !== null ? (
         <p>No heart rate readings this day.</p>
       ) : (
-        <p className="text-muted">Chart hidden for Month/Year/long Custom views — switch to Day or Week to see it.</p>
+        <div>
+          <button type="button" onClick={handleShowChart} disabled={loadingSeries}>
+            {loadingSeries ? 'Loading…' : 'Show chart for this day'}
+          </button>
+          {seriesError && <p className="login-error">{seriesError}</p>}
+        </div>
       )}
     </>
   )
@@ -480,9 +537,10 @@ export default function HeartRate({ userId, view }) {
     return (
       <DayBody
         key={day.date}
+        userId={userId}
         {...day}
         seriesIncluded={data.series_included}
-        onOpenSession={(period) => setSessionRequest(period)}
+        onOpenSession={(period, maxHr) => setSessionRequest({ ...period, maxHr })}
       />
     )
   }

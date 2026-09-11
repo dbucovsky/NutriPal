@@ -38,6 +38,55 @@
   padding: 16px;
 }
 
+/* FAQ page (frontend/faq.html) - a standalone page, not part of .app, so it
+   gets its own container width/padding. Content is rendered from Markdown
+   (see FaqPage.jsx), so this also styles whatever marked() produces:
+   headings, tables, code, lists. */
+.faq-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.faq-entry {
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.faq-entry:last-child {
+  border-bottom: none;
+}
+
+.faq-entry h2 {
+  font-size: 1.15rem;
+  margin: 0 0 12px;
+}
+
+.faq-entry table {
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+
+.faq-entry th,
+.faq-entry td {
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.faq-entry code {
+  background: var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+}
+
+.faq-entry p,
+.faq-entry ul {
+  line-height: 1.5;
+}
+
 .app-header {
   display: flex;
   justify-content: space-between;
@@ -156,6 +205,18 @@
 
 .menu-dropdown-item:hover {
   background: var(--border);
+}
+
+.menu-dropdown-item-parent {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.menu-dropdown-submenu-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 12px;
 }
 
 .tab-nav {
@@ -363,7 +424,8 @@
 
 .quarter-section,
 .month-section,
-.week-section {
+.week-section,
+.day-section {
   margin-left: 12px;
 }
 
@@ -412,6 +474,7 @@ details[open] > .tree-group-header .tree-group-title::before {
 
 .meal-section {
   margin-bottom: 20px;
+  margin-left: 12px;
 }
 
 .meal-section summary {
@@ -743,6 +806,47 @@ button.macro-cell-clickable:hover {
   background: #3a8a4d;
 }
 
+/* Classic 5-zone heart-rate-training model (Exercise tab) - a blue-to-red
+   ramp, the common convention for HR zone charts, reusing .quality-badge's
+   pill shape. */
+.hr-zone-1 {
+  background: #5b8fc9;
+}
+
+.hr-zone-2 {
+  background: #3a8a4d;
+}
+
+.hr-zone-3 {
+  background: #c9a227;
+}
+
+.hr-zone-4 {
+  background: #d9822b;
+}
+
+.hr-zone-5 {
+  background: #b3261e;
+}
+
+/* Zone-colored session bpm-curve popups (SessionHrPopup.jsx, HeartRate.jsx's
+   exercise-session popup) - a static Z1..Z5 color key, same layout as
+   .stage-legend. */
+.hr-zone-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 8px;
+}
+
+.hr-zone-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* Exercise */
 
 .exercise-list {
@@ -806,6 +910,55 @@ button.macro-cell-clickable:hover {
 .steps-other-sources {
   margin-top: 4px;
   font-size: 0.8rem;
+}
+
+/* Settings */
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-field {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-field label,
+.settings-field > span:first-child {
+  flex: 0 0 90px;
+  font-weight: 600;
+}
+
+.settings-field input[type='number'] {
+  width: 80px;
+}
+
+.settings-field input,
+.settings-field select {
+  padding: 6px 8px;
+}
+
+.settings-max-hr {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-radio-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  cursor: pointer;
+}
+
+.settings-radio-row input[type='number'] {
+  width: 80px;
+  padding: 4px 6px;
 }
 
 /* Sync */

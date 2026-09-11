@@ -89,11 +89,13 @@ export function enumerateNodeKeys(tree) {
   return keys
 }
 
-// year/quarter/month default closed (a year view showing 365 open day
-// sections at once isn't useful); week/day default open - same heuristic
-// MultiDay/FoodTree already use.
-export function defaultOpenFor(level) {
-  return level === 'week' || level === 'day'
+// Everything defaults closed, at every level - the toolbar's own "Collapse
+// all" and the natural first-load/Reset state should be the same thing,
+// not two different heuristics to keep in sync. Expanding anything is then
+// always a deliberate click, via the toolbar's Expand all/collapse-to-level
+// or a section's own toggle.
+export function defaultOpenFor() {
+  return false
 }
 
 function renderNodes(nodes, openState, onToggle, renderGroupSummary, renderDaySummary, renderDayBody) {

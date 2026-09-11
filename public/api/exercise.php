@@ -9,6 +9,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../../src/Env.php';
 require_once __DIR__ . '/../../src/Database.php';
 require_once __DIR__ . '/../../src/LocalDay.php';
+require_once __DIR__ . '/../../src/MaxHeartRate.php';
 
 Env::load(__DIR__ . '/../../.env');
 header('Content-Type: application/json');
@@ -64,9 +65,20 @@ foreach ($stmt as $row) {
     ];
 }
 
+// A per-day estimate, not one value for the whole response - a session
+// from 5 months ago should be zone-classified against the Max HR that was
+// actually in effect back then, not today's (age/observed both drift over
+// time; observed especially, since it's a rolling 21-day window).
+$maxHrByDate = MaxHeartRate::getEffectiveForDates($pdo, $userId, array_keys($sessionsByDate), $timezone);
+
 $days = [];
 foreach ($sessionsByDate as $localDate => $sessions) {
-    $days[] = ['date' => $localDate, 'sessions' => $sessions];
+    $days[] = [
+        'date' => $localDate,
+        'max_heart_rate' => $maxHrByDate[$localDate]['value'] ?? null,
+        'max_heart_rate_source' => $maxHrByDate[$localDate]['source'] ?? null,
+        'sessions' => $sessions,
+    ];
 }
 
 echo json_encode([
