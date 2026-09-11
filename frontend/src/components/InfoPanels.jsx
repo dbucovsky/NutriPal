@@ -74,6 +74,7 @@ export function SettingsPanel({ userId }) {
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [overrideInput, setOverrideInput] = useState('')
+  const [stepsGoalInput, setStepsGoalInput] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -190,11 +191,37 @@ export function SettingsPanel({ userId }) {
         })()}
       </div>
 
+      <div className="settings-field">
+        <label htmlFor="settings-steps-goal">Daily step goal</label>
+        <input
+          id="settings-steps-goal"
+          type="number"
+          min="1"
+          placeholder={`${profile.steps_goal.toLocaleString()} steps`}
+          value={stepsGoalInput}
+          onChange={(e) => setStepsGoalInput(e.target.value)}
+        />
+        <button
+          type="button"
+          disabled={!stepsGoalInput || saving}
+          onClick={() => {
+            applyPatch({ steps_goal: Number(stepsGoalInput) })
+            setStepsGoalInput('')
+          }}
+        >
+          Save
+        </button>
+      </div>
+
       {error && <p className="login-error">{error}</p>}
 
       <p className="text-muted">
         Max heart rate colors the heart-rate zones on the Exercise tab. All three estimates above are always kept up
         to date regardless of which one is selected, so switching is instant.
+      </p>
+      <p className="text-muted">
+        Daily step goal colors the Steps tab: below goal is bad, at or above is good, double the goal or more is
+        great. Defaults to 10,000 steps until changed here.
       </p>
     </div>
   )

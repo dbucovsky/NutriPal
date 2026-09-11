@@ -5,19 +5,23 @@ declare(strict_types=1);
 // GET  /api/profile.php?user_id=2
 //      -> 200 {birth_date, gender_id, max_hr_source, max_hr_age_estimate,
 //              max_hr_observed_estimate, max_hr_manual_override,
-//              max_heart_rate, max_heart_rate_source}
-//      (the last two are the resolved "effective" value/source; the rest
-//      are per-source detail for the Settings panel, which shows all three)
+//              max_heart_rate, max_heart_rate_source, steps_goal}
+//      (the last two of the max-hr fields are the resolved "effective"
+//      value/source; the rest are per-source detail for the Settings
+//      panel, which shows all three. steps_goal is never null in the
+//      response - defaults to DEFAULT_STEPS_GOAL when unset in the DB)
 // POST /api/profile.php
 //      { "user_id": 2, "birth_date"?: "YYYY-MM-DD", "gender_id"?: 1,
-//        "max_heart_rate_override"?: 190, "max_hr_source"?: "age"|"observed"|"manual" }
+//        "max_heart_rate_override"?: 190, "max_hr_source"?: "age"|"observed"|"manual",
+//        "steps_goal"?: 10000 }
 //      -> 200 same shape as GET
-// birth_date/gender_id/max_hr_source are only written when present in the
-// body, so a request can update just one field.
+// birth_date/gender_id/max_hr_source/steps_goal are only written when
+// present in the body, so a request can update just one field.
 
 require_once __DIR__ . '/../../src/Env.php';
 require_once __DIR__ . '/../../src/Database.php';
 require_once __DIR__ . '/../../src/MaxHeartRate.php';
+require_once __DIR__ . '/../../src/StepsGoal.php';
 
 Env::load(__DIR__ . '/../../.env');
 header('Content-Type: application/json');
@@ -71,6 +75,10 @@ if ($method === 'POST') {
     if (isset($body['max_hr_source']) && in_array($body['max_hr_source'], ['age', 'observed', 'manual'], true)) {
         MaxHeartRate::setSource($pdo, $userId, $body['max_hr_source']);
     }
+
+    if (isset($body['steps_goal']) && (int) $body['steps_goal'] > 0) {
+        StepsGoal::set($pdo, $userId, (int) $body['steps_goal']);
+    }
 }
 
 $userStmt = $pdo->prepare('SELECT birth_date, gender_id FROM users WHERE id = ?');
@@ -94,4 +102,5 @@ echo json_encode([
     'max_hr_manual_override' => $maxHr['manual'],
     'max_heart_rate' => $maxHr['effective'],
     'max_heart_rate_source' => $maxHr['effective_source'],
+    'steps_goal' => StepsGoal::get($pdo, $userId),
 ]);

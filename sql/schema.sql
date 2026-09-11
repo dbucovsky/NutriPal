@@ -522,6 +522,12 @@ CREATE TABLE users (
     birth_date DATE NULL,
     gender_id BIGINT UNSIGNED NULL,
     max_hr_source_id BIGINT UNSIGNED NULL,
+    -- Daily step target used to color the Steps tab (< goal = bad, >= goal
+    -- = good, >= goal*2 = great). NULL = not set yet - the app defaults to
+    -- 10,000 in that case rather than storing the default as a real value,
+    -- so a future change to the app's own default doesn't silently relabel
+    -- a user who never touched this setting.
+    steps_goal INT UNSIGNED NULL,
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
@@ -543,6 +549,7 @@ CREATE TABLE nutripal_hist.users_hist (
     birth_date DATE NULL,
     gender_id BIGINT UNSIGNED NULL,
     max_hr_source_id BIGINT UNSIGNED NULL,
+    steps_goal INT UNSIGNED NULL,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
     changed_by_user_id BIGINT UNSIGNED NULL,
@@ -1195,15 +1202,51 @@ CREATE TABLE max_heart_rate_history (
     CONSTRAINT fk_max_heart_rate_history_user FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB;
 
+-- Which section of the FAQ page an entry is grouped under. A small, fixed
+-- vocabulary whose *display order* is its whole reason to exist as its own
+-- lookup table rather than a plain string column - seeded ids double as
+-- the section order the FAQ page renders in (General overview first, then
+-- one section per tab in the same order the tab bar itself uses, then
+-- Settings, then Contact/Support last), same hardcode-the-small-closed-
+-- vocabulary-client-side pattern as lut_gender/lut_max_hr_source.
+CREATE TABLE lut_faq_section (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(64) NOT NULL,
+    description VARCHAR(255) NULL,
+    is_obsolete BOOLEAN NOT NULL DEFAULT FALSE,
+    db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    changed_by VARCHAR(255) NULL,
+    changed_by_user_id BIGINT UNSIGNED NULL,
+    UNIQUE KEY uq_lut_faq_section_name (name)
+) ENGINE=InnoDB;
+
+CREATE TABLE nutripal_hist.lut_faq_section_hist (
+    id_hist BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    db_hist_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id BIGINT UNSIGNED NOT NULL,
+    valid_start_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    valid_end_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    name VARCHAR(64) NOT NULL,
+    description VARCHAR(255) NULL,
+    is_obsolete BOOLEAN NOT NULL,
+    created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    changed_by VARCHAR(255) NULL,
+    changed_by_user_id BIGINT UNSIGNED NULL,
+    KEY idx_lut_faq_section_hist_id (id)
+) ENGINE=InnoDB;
+
 -- App-level content, not user health data - one row per FAQ entry, shown on
 -- the standalone FAQ page (frontend/faq.html) reached from the menu's
 -- Help submenu. question/answer are Markdown (rendered client-side via
 -- `marked`), not raw HTML - simpler to hand-author/edit directly in the DB
--- and avoids trusting stored HTML. display_order is a plain sort key, not a
--- date/priority; is_obsolete lets an entry be retired without a destructive
--- delete, consistent with this schema's "nothing is ever destroyed" rule.
+-- and avoids trusting stored HTML. display_order is a plain sort key within
+-- a section, not a date/priority; is_obsolete lets an entry be retired
+-- without a destructive delete, consistent with this schema's "nothing is
+-- ever destroyed" rule.
 CREATE TABLE faq_entries (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    section_id BIGINT UNSIGNED NOT NULL,
     question TEXT NOT NULL,
     answer TEXT NOT NULL,
     display_order INT NOT NULL DEFAULT 0,
@@ -1211,7 +1254,8 @@ CREATE TABLE faq_entries (
     db_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     changed_by VARCHAR(255) NULL,
-    changed_by_user_id BIGINT UNSIGNED NULL
+    changed_by_user_id BIGINT UNSIGNED NULL,
+    CONSTRAINT fk_faq_entries_section FOREIGN KEY (section_id) REFERENCES lut_faq_section(id)
 ) ENGINE=InnoDB;
 
 CREATE TABLE nutripal_hist.faq_entries_hist (
@@ -1220,6 +1264,7 @@ CREATE TABLE nutripal_hist.faq_entries_hist (
     id BIGINT UNSIGNED NOT NULL,
     valid_start_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     valid_end_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    section_id BIGINT UNSIGNED NOT NULL,
     question TEXT NOT NULL,
     answer TEXT NOT NULL,
     display_order INT NOT NULL,
@@ -1686,9 +1731,20 @@ CREATE TRIGGER trg_lut_max_hr_source_bd BEFORE DELETE ON lut_max_hr_source FOR E
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Delete is not allowed on lut_max_hr_source; change status instead.';
 END$$
 
+CREATE TRIGGER trg_lut_faq_section_bu BEFORE UPDATE ON lut_faq_section FOR EACH ROW BEGIN
+    INSERT INTO nutripal_hist.lut_faq_section_hist (id, valid_start_ts, valid_end_ts, name, description, is_obsolete, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.name, OLD.description, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    SET NEW.id = OLD.id;
+    SET NEW.created_ts = OLD.created_ts;
+    SET NEW.db_ts = NOW();
+END$$
+CREATE TRIGGER trg_lut_faq_section_bd BEFORE DELETE ON lut_faq_section FOR EACH ROW BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Delete is not allowed on lut_faq_section; change status instead.';
+END$$
+
 CREATE TRIGGER trg_faq_entries_bu BEFORE UPDATE ON faq_entries FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.faq_entries_hist (id, valid_start_ts, valid_end_ts, question, answer, display_order, is_obsolete, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.question, OLD.answer, OLD.display_order, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.faq_entries_hist (id, valid_start_ts, valid_end_ts, section_id, question, answer, display_order, is_obsolete, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.section_id, OLD.question, OLD.answer, OLD.display_order, OLD.is_obsolete, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();
@@ -1698,8 +1754,8 @@ CREATE TRIGGER trg_faq_entries_bd BEFORE DELETE ON faq_entries FOR EACH ROW BEGI
 END$$
 
 CREATE TRIGGER trg_users_bu BEFORE UPDATE ON users FOR EACH ROW BEGIN
-    INSERT INTO nutripal_hist.users_hist (id, valid_start_ts, valid_end_ts, email, name, status_id, birth_date, gender_id, max_hr_source_id, created_ts, changed_by, changed_by_user_id)
-    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.email, OLD.name, OLD.status_id, OLD.birth_date, OLD.gender_id, OLD.max_hr_source_id, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
+    INSERT INTO nutripal_hist.users_hist (id, valid_start_ts, valid_end_ts, email, name, status_id, birth_date, gender_id, max_hr_source_id, steps_goal, created_ts, changed_by, changed_by_user_id)
+    VALUES (OLD.id, OLD.db_ts, NOW(), OLD.email, OLD.name, OLD.status_id, OLD.birth_date, OLD.gender_id, OLD.max_hr_source_id, OLD.steps_goal, OLD.created_ts, OLD.changed_by, OLD.changed_by_user_id);
     SET NEW.id = OLD.id;
     SET NEW.created_ts = OLD.created_ts;
     SET NEW.db_ts = NOW();

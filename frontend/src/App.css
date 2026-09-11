@@ -48,9 +48,22 @@
   padding: 16px;
 }
 
-.faq-entry {
+.faq-section {
   margin-bottom: 32px;
-  padding-bottom: 24px;
+}
+
+.faq-section h2 {
+  font-size: 1.05rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.faq-entry {
+  padding: 10px 0;
   border-bottom: 1px solid var(--border);
 }
 
@@ -58,9 +71,14 @@
   border-bottom: none;
 }
 
-.faq-entry h2 {
-  font-size: 1.15rem;
-  margin: 0 0 12px;
+.faq-question {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+.faq-answer {
+  margin-top: 12px;
 }
 
 .faq-entry table {
@@ -804,6 +822,10 @@ button.macro-cell-clickable:hover {
 
 .quality-good {
   background: #3a8a4d;
+}
+
+.quality-great {
+  background: #2f6fb3;
 }
 
 /* Classic 5-zone heart-rate-training model (Exercise tab) - a blue-to-red

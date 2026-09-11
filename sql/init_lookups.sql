@@ -115,6 +115,14 @@ INSERT INTO lut_gender (id, name) VALUES
 INSERT INTO lut_max_hr_source (id, name) VALUES
     (1, 'age'), (2, 'observed'), (3, 'manual');
 
+-- Seeded ids double as the FAQ page's own section display order - General
+-- first, then one section per tab (same order the tab bar itself uses),
+-- then Settings, then Contact/Support last.
+INSERT INTO lut_faq_section (id, name) VALUES
+    (1, 'General'), (2, 'Nutrition'), (3, 'Heart Rate'), (4, 'Sleep'),
+    (5, 'Exercise'), (6, 'Weight'), (7, 'Steps'), (8, 'Settings'),
+    (9, 'Contact & Support');
+
 -- AWAKE/LIGHT/DEEP/REM cover the newer STAGES sleep-tracking model;
 -- ASLEEP/RESTLESS/UNSPECIFIED are the older, coarser CLASSIC-mode
 -- vocabulary (older/less capable trackers) — confirmed present in real
