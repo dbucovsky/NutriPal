@@ -121,6 +121,23 @@ foreach ($dayBuckets as $localDate => $bucket) {
         }
     }
 
+    // A day with no dinner logged YET (still afternoon/evening, dinner just
+    // hasn't happened) left $referenceStart['DINNER'] null, and the old
+    // cascade's final `else` unconditionally meant LATE_NIGHT_SNACK - so any
+    // ordinary snack logged between lunch and (a not-yet-logged) dinner was
+    // mislabeled every time (confirmed real case: lunch at 17:58, a 18:20
+    // snack landed in LATE_NIGHT_SNACK instead of AFTERNOON_SNACK, purely
+    // because dinner hadn't been logged that day at the time of viewing).
+    // The same guard also protects against a DINNER that IS present but
+    // nonsensically early (e.g. a late dinner just after midnight that
+    // still lands in this local day's bucket under the midnight-to-midnight
+    // day boundary, timestamped before this same day's breakfast/lunch) -
+    // only trust DINNER as a cascade boundary when it's actually later in
+    // the day than whatever breakfast/lunch were logged.
+    $dinnerIsValid = $referenceStart['DINNER'] !== null
+        && ($referenceStart['BREAKFAST'] === null || $referenceStart['DINNER'] > $referenceStart['BREAKFAST'])
+        && ($referenceStart['LUNCH'] === null || $referenceStart['DINNER'] > $referenceStart['LUNCH']);
+
     $meals = array_fill_keys(MEAL_KEYS, []);
     foreach ($bucket['rawRows'] as $row) {
         $mealType = $row['meal_type'];
@@ -130,10 +147,12 @@ foreach ($dayBuckets as $localDate => $bucket) {
                 $mealType = 'EARLY_SNACK';
             } elseif ($referenceStart['LUNCH'] !== null && $startTime < $referenceStart['LUNCH']) {
                 $mealType = 'MORNING_SNACK';
-            } elseif ($referenceStart['DINNER'] !== null && $startTime < $referenceStart['DINNER']) {
+            } elseif ($dinnerIsValid && $startTime < $referenceStart['DINNER']) {
                 $mealType = 'AFTERNOON_SNACK';
-            } else {
+            } elseif ($dinnerIsValid) {
                 $mealType = 'LATE_NIGHT_SNACK';
+            } else {
+                $mealType = 'AFTERNOON_SNACK';
             }
         }
         $meals[$mealType][] = $row['entry'];

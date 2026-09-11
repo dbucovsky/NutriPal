@@ -212,8 +212,9 @@ final class ApiLogger
  */
 final class ReplayReader
 {
-    private array $lines = [];
-    private array $cursor = [];
+    /** @var array<string, resource|false> */
+    private array $handles = [];
+    private array $exhausted = [];
 
     public function __construct(private string $runDir)
     {
@@ -225,31 +226,41 @@ final class ReplayReader
         return is_file($path) ? json_decode(file_get_contents($path), true) : null;
     }
 
-    private function ensureLoaded(string $logKey): void
+    private function handleFor(string $logKey)
     {
-        if (isset($this->lines[$logKey])) {
-            return;
+        if (array_key_exists($logKey, $this->handles)) {
+            return $this->handles[$logKey];
         }
         $path = "{$this->runDir}/{$logKey}.jsonl";
-        $entries = [];
-        if (is_file($path)) {
-            foreach (file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
-                $entries[] = json_decode($line, true);
-            }
-        }
-        $this->lines[$logKey] = $entries;
-        $this->cursor[$logKey] = 0;
+        $this->handles[$logKey] = is_file($path) ? fopen($path, 'r') : false;
+        return $this->handles[$logKey];
     }
 
+    // Streams one recorded line at a time instead of loading the whole
+    // .jsonl into memory - a single replay run can hold several category
+    // logs open at once, and some real recorded runs' heart-rate/steps logs
+    // exceed 500MB (confirmed real case: 885MB), which blew PHP's memory
+    // limit when this read the entire file via file() up front.
     public function next(string $logKey): array
     {
-        $this->ensureLoaded($logKey);
-        $i = $this->cursor[$logKey];
-        if (!isset($this->lines[$logKey][$i])) {
+        if (!empty($this->exhausted[$logKey])) {
             return ['status' => 200, 'body' => json_encode(['dataPoints' => []])];
         }
-        $this->cursor[$logKey]++;
-        return $this->lines[$logKey][$i]['response'];
+        $handle = $this->handleFor($logKey);
+        if ($handle === false) {
+            $this->exhausted[$logKey] = true;
+            return ['status' => 200, 'body' => json_encode(['dataPoints' => []])];
+        }
+        do {
+            $line = fgets($handle);
+            if ($line === false) {
+                $this->exhausted[$logKey] = true;
+                return ['status' => 200, 'body' => json_encode(['dataPoints' => []])];
+            }
+            $line = trim($line);
+        } while ($line === '');
+        $rec = json_decode($line, true);
+        return $rec['response'];
     }
 }
 
@@ -784,7 +795,12 @@ function fetchFoodServings(string $accessToken, string $foodRef, array &$cache):
         if (isset($s['foodMeasurementUnit'], $s['foodMeasurementUnitDisplayName'])) {
             $byUnitRef[$s['foodMeasurementUnit']] = strtolower($s['foodMeasurementUnitDisplayName']);
         }
-        if (isset($s['foodMeasurementUnitDisplayName']) && strtolower($s['foodMeasurementUnitDisplayName']) === 'gram') {
+        // "gramme" (confirmed real: British/French-localized catalog entries,
+        // e.g. "Fat Free Cottage Cheese") is the same unit as "gram" - missing
+        // it here meant $gramMultiplier stayed null and every conversion for
+        // that food fell through to the ratio-based fallback path, even
+        // though a perfectly good gram-equivalent pivot was right there.
+        if (isset($s['foodMeasurementUnitDisplayName']) && in_array(strtolower($s['foodMeasurementUnitDisplayName']), ['gram', 'gramme'], true)) {
             $gramMultiplier = (float) $mult;
         }
     }
@@ -863,6 +879,21 @@ function findOrCreateFoodFallback(PDO $pdo, int $userId, int $massDimensionId, s
         return $incoming / $baseline;
     };
 
+    // Evaluate every candidate (not just the first version-descending one
+    // that merely passes) and keep the BEST fit - the one whose ratios
+    // cluster most tightly around their own median. Two versions of the
+    // same food can each independently pass the 15%-of-median consistency
+    // check while one is a visibly worse match than the other (confirmed
+    // real case: "Fat Free Cottage Cheese, Small Curd" v2 lacks a stored
+    // fat value, so its energy/protein/carb ratios were only checked
+    // against each other - energy disagreed with protein/carb by ~13%, but
+    // that stayed under the 15% band against a median of only 3 values,
+    // while v1's ratios agreed to within ~5%). Stopping at the first pass
+    // silently locked onto the worse of the two every time.
+    $bestFoodId = null;
+    $bestBrandName = null;
+    $bestMedian = null;
+    $bestFitness = null;
     foreach ($candidates as $row) {
         $ratios = array_filter([
             $impliedRatio($energyKcal, $row['energy_kcal'] !== null ? (float) $row['energy_kcal'] : null),
@@ -876,32 +907,49 @@ function findOrCreateFoodFallback(PDO $pdo, int $userId, int $massDimensionId, s
         }
         sort($ratios);
         $median = $ratios[intdiv(count($ratios), 2)];
+        $maxDeviation = 0.0;
         $consistent = true;
         foreach ($ratios as $r) {
-            if (abs($r - $median) > $median * 0.15) {
+            $deviation = abs($r - $median) / $median;
+            $maxDeviation = max($maxDeviation, $deviation);
+            if ($deviation > 0.15) {
                 $consistent = false;
                 break;
             }
         }
-        if ($consistent) {
-            $foodId = (int) $row['id'];
-            enrichBrandIfMissing($pdo, $foodId, $row['brand_name'], $brandName);
-            $servingUnitId = $servingUnitCache[$foodId] ?? null;
-            if ($servingUnitId === null) {
-                // Matched a food created by a previous run (or by the
-                // Health Connect importer) whose custom unit isn't in this
-                // run's in-memory cache — look it up rather than fail.
-                $lookup = $pdo->prepare(
-                    "SELECT lsu.id FROM lut_serving_unit lsu
-                     JOIN foods_db_custom_units fdcu ON fdcu.id = lsu.foods_db_custom_unit_id
-                     WHERE fdcu.food_id = ? ORDER BY fdcu.is_default DESC LIMIT 1"
-                );
-                $lookup->execute([$foodId]);
-                $servingUnitId = (int) $lookup->fetchColumn();
-                $servingUnitCache[$foodId] = $servingUnitId;
-            }
-            return [$foodId, false, round($median, 4), $servingUnitId];
+        if ($consistent && ($bestFitness === null || $maxDeviation < $bestFitness)) {
+            $bestFoodId = (int) $row['id'];
+            $bestBrandName = $row['brand_name'];
+            $bestMedian = $median;
+            $bestFitness = $maxDeviation;
         }
+    }
+    if ($bestFoodId !== null) {
+        $foodId = $bestFoodId;
+        enrichBrandIfMissing($pdo, $foodId, $bestBrandName, $brandName);
+        // $median is a ratio against the matched food's own per-100g
+        // baseline, so it's only a correct serving_amount against a
+        // unit whose equivalent_amount is exactly 100 (the "reported
+        // serving" convention new foods below always get) - NOT
+        // whatever unit this food happens to already default to. A
+        // food first established via findOrCreateFoodReal()'s real-gram
+        // path (e.g. a chicken breast logged in "oz") defaults to THAT
+        // real unit; reusing it here instead of this food's own
+        // "reported serving" unit silently corrupted the displayed
+        // total by a factor of (100 / that unit's equivalent_amount)
+        // every time a later entry for the same food matched by ratio
+        // instead of resolving a real gram conversion (confirmed real
+        // case: an "oz"-established chicken breast, then logged again
+        // in "tsp"/whatever unit doesn't resolve, showed ~45 kcal
+        // instead of the real 160). getOrCreateCustomUnit() finds this
+        // food's own reported-serving unit if one already exists (from
+        // an earlier fallback match) rather than creating a duplicate.
+        $servingUnitId = $servingUnitCache[$foodId] ?? null;
+        if ($servingUnitId === null) {
+            $servingUnitId = getOrCreateCustomUnit($pdo, $foodId, 'reported serving', 100.0, "api_reported_serving_{$foodId}", false);
+            $servingUnitCache[$foodId] = $servingUnitId;
+        }
+        return [$foodId, false, round($bestMedian, 4), $servingUnitId];
     }
 
     $latestVersion = empty($candidates) ? null : ((int) $candidates[0]['version']);
@@ -1185,18 +1233,28 @@ function syncNutrition(string $accessToken, PDO $pdo, int $userId, int $ingestio
         }
 
         $servingAmount = isset($nl['serving']['amount']) ? (float) $nl['serving']['amount'] : 1.0;
-        // NOT a display name - nutrition-log entries only carry a
-        // food-measurement-unit dataPoint *reference* here (confirmed
-        // against real recorded API responses: this entry never has a
-        // foodMeasurementUnitDisplayName field at all). Resolved below via
-        // the food resource's own byUnitRef map, once $servings is fetched -
-        // the literal 'serving' fallback was silently used for every entry
-        // before this fix, corrupting gram conversion for anything not
-        // actually reported in the food's own generic "serving" unit
-        // (confirmed real case: 3 fl oz of milk treated as 3 whole
-        // "servings", 240g each instead of 30.71g each - an 8x error).
+        // Prefer the entry's own reported display name (confirmed present
+        // on most real nutrition-log entries - "tsp", "cup", "oz", "medium",
+        // "tbsp", etc. - contrary to this comment's earlier claim that it
+        // never appears; that was only true of entries that instead carry a
+        // food-measurement-unit dataPoint *reference* with no display name
+        // at all, still handled below via the food resource's own
+        // byUnitRef map). Defaulting straight to the literal 'serving'
+        // whenever neither is present/resolvable was silently used for
+        // every such entry before this fix, corrupting gram conversion for
+        // anything not actually reported in the food's own generic
+        // "serving" unit (confirmed real case: 3 fl oz of milk treated as 3
+        // whole "servings", 240g each instead of 30.71g each - an 8x
+        // error) - and even when gram conversion still happened to resolve
+        // (the food's own "serving" entry existing at some other size),
+        // silently displayed the wrong unit label to the user (confirmed
+        // real case: a banana logged as "1 medium" displayed as "1
+        // serving", scaled to that food's generic serving weight instead of
+        // a medium banana's).
         $unitRef = $nl['serving']['foodMeasurementUnit'] ?? null;
-        $unitLabel = 'serving';
+        $unitLabel = isset($nl['serving']['foodMeasurementUnitDisplayName'])
+            ? (string) $nl['serving']['foodMeasurementUnitDisplayName']
+            : 'serving';
         $foodRef = $nl['food'] ?? null;
 
         // Fetched whenever a food reference exists, regardless of whether
@@ -1210,7 +1268,7 @@ function syncNutrition(string $accessToken, PDO $pdo, int $userId, int $ingestio
             $servings = fetchFoodServings($accessToken, $foodRef, $foodResourceCache);
             if ($servings !== null) {
                 $brandName = $servings['brand'];
-                if ($unitRef !== null && isset($servings['byUnitRef'][$unitRef])) {
+                if (!isset($nl['serving']['foodMeasurementUnitDisplayName']) && $unitRef !== null && isset($servings['byUnitRef'][$unitRef])) {
                     $unitLabel = $servings['byUnitRef'][$unitRef];
                 }
                 if ($servingAmount > 0) {
