@@ -1004,6 +1004,11 @@ button.macro-cell-clickable:hover {
   padding: 6px 8px;
 }
 
+.sync-auth-expired {
+  flex-basis: 100%;
+  color: var(--danger);
+}
+
 .sync-output {
   flex-basis: 100%;
   max-height: 400px;

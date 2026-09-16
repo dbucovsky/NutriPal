@@ -74,5 +74,10 @@ exec($command, $output, $exitCode);
 echo json_encode([
     'success' => $exitCode === 0,
     'exitCode' => $exitCode,
+    // Exit code 3 is sync-google-health.php's dedicated signal for an
+    // expired/revoked Google refresh token (see its GoogleAuthExpiredException
+    // catch) - surfaced separately so the frontend can offer a reconnect
+    // link instead of just showing the raw fatal-error output.
+    'authExpired' => $exitCode === 3,
     'output' => implode("\n", $output),
 ]);

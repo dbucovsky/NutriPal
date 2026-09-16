@@ -233,7 +233,15 @@ export default function Sync() {
       {result && (
         <section className="sync-section">
           <h3>{result.success ? 'Done' : `Failed (exit ${result.exitCode})`}</h3>
-          <pre className="sync-output">{result.output}</pre>
+          {result.authExpired ? (
+            <p className="sync-auth-expired">
+              Google Health connection expired or was revoked — expected periodically while the app is in
+              Testing mode (Google auto-expires refresh tokens after ~7 days).{' '}
+              <a href="/auth-login.php">Reconnect Google Health</a>, then try again.
+            </p>
+          ) : (
+            <pre className="sync-output">{result.output}</pre>
+          )}
         </section>
       )}
     </div>

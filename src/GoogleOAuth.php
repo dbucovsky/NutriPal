@@ -81,6 +81,9 @@ final class GoogleOAuth
         $data = json_decode($body, true);
         if ($status !== 200 || !is_array($data)) {
             $message = is_array($data) ? ($data['error_description'] ?? $data['error'] ?? $body) : $body;
+            if (is_array($data) && ($data['error'] ?? null) === 'invalid_grant') {
+                throw new GoogleAuthExpiredException("Google token request returned HTTP {$status}: {$message}");
+            }
             throw new RuntimeException("Google token request returned HTTP {$status}: {$message}");
         }
 

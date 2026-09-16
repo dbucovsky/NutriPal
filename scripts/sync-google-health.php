@@ -111,6 +111,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/../src/Env.php';
 require __DIR__ . '/../src/GoogleOAuth.php';
+require __DIR__ . '/../src/GoogleAuthExpiredException.php';
 require __DIR__ . '/../src/TokenStore.php';
 require __DIR__ . '/../src/Database.php';
 require __DIR__ . '/../src/SyncSchedule.php';
@@ -345,7 +346,18 @@ if ($replayRunId !== null) {
         clientSecret: Env::require('GOOGLE_CLIENT_SECRET'),
         redirectUri: Env::require('GOOGLE_REDIRECT_URI')
     );
-    $refreshed = $oauth->refreshAccessToken($tokens['refresh_token']);
+    try {
+        $refreshed = $oauth->refreshAccessToken($tokens['refresh_token']);
+    } catch (GoogleAuthExpiredException $e) {
+        // Exit code 3 is a distinct signal (vs. the generic exit(1) errors
+        // above/below) so callers like run-sync.php can detect this
+        // specific case and point at re-auth instead of just dumping the
+        // error. Expected periodically while the OAuth consent screen is
+        // in Testing status - Google auto-expires refresh tokens after
+        // ~7 days there.
+        logLine("ERROR: Google Health connection expired or was revoked ({$e->getMessage()}). Reconnect via /auth-login.php, then re-run sync.");
+        exit(3);
+    }
     $tokenStore->save($refreshed);
     $accessToken = $refreshed['access_token'];
 }

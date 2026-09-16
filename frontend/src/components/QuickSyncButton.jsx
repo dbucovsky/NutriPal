@@ -22,14 +22,27 @@ export default function QuickSyncButton() {
     setBusy(true)
     setStatus(null)
     clearTimeout(timeoutRef.current)
+    let authExpired = false
     try {
       const result = await runSync({ mode: 'quick' })
-      setStatus(result.success ? { ok: true, message: 'Synced' } : { ok: false, message: `Sync failed (exit ${result.exitCode})` })
+      authExpired = result.authExpired === true
+      if (result.success) {
+        setStatus({ ok: true, message: 'Synced' })
+      } else if (authExpired) {
+        // Expected periodically while the app is in Testing mode - Google
+        // auto-expires refresh tokens after ~7 days. Left up (no auto-dismiss
+        // below) so there's time to click through.
+        setStatus({ ok: false, message: 'Google Health connection expired', authExpired: true })
+      } else {
+        setStatus({ ok: false, message: `Sync failed (exit ${result.exitCode})` })
+      }
     } catch (err) {
       setStatus({ ok: false, message: err.message })
     } finally {
       setBusy(false)
-      timeoutRef.current = setTimeout(() => setStatus(null), 5000)
+      if (!authExpired) {
+        timeoutRef.current = setTimeout(() => setStatus(null), 5000)
+      }
     }
   }
 
@@ -54,7 +67,11 @@ export default function QuickSyncButton() {
           <path d="M5 13.5v-3.4h3.4" fill="none" stroke="currentColor" strokeWidth="1.6" />
         </svg>
       </button>
-      {status && <span className={status.ok ? 'quick-sync-status ok' : 'quick-sync-status error'}>{status.message}</span>}
+      {status && (
+        <span className={status.ok ? 'quick-sync-status ok' : 'quick-sync-status error'}>
+          {status.authExpired ? <a href="/auth-login.php">{status.message} — reconnect</a> : status.message}
+        </span>
+      )}
     </span>
   )
 }

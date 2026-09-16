@@ -22,6 +22,7 @@ function Stop-ProcessOnPort {
 }
 
 Stop-ProcessOnPort -Port 8080 -Name "NutriPal PHP server"
+Stop-ProcessOnPort -Port 5173 -Name "NutriPal frontend dev server"
 
 Write-Host ""
 Write-Host "Done. XAMPP/MySQL was not touched - stop it via the XAMPP Control Panel if needed." -ForegroundColor Cyan

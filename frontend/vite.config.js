@@ -11,6 +11,11 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': 'http://localhost:8080',
+      // Reconnect-Google-Health links point at these directly (see
+      // Sync.jsx/QuickSyncButton.jsx authExpired handling) - proxied so
+      // they work from the Vite dev origin without hardcoding :8080.
+      '/auth-login.php': 'http://localhost:8080',
+      '/auth-callback.php': 'http://localhost:8080',
     },
   },
   build: {
