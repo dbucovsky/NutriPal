@@ -147,3 +147,19 @@ hierarchy" setting are still to be made by hand in the web interface.
 
 Not yet verified live: finalize and hotfix against a real merge, a new Alert or Version ticket getting its
 `Ticket type`, and `PROJECT_TOKEN` itself. The first of these happens when the versioning workflow is switched on.
+
+## Backfill of the existing issues (2026-10-10)
+
+- All 152 issues (#1 to #152) were added to the new board (project 6). Fields set: Origin *Backdated*; Ticket type
+  (Feature 72, Bug 45, Task 35, guessed from the migration draft's `(feature)`, `(fix)` and `(chore)` tags and, for
+  titles not in it, from the first word); Status and Resolution carried over from the old board (136 Completed and
+  Done with Delivery *Merged*, the Version, Version# and Start/End dates from the "Shipped in" line; 14 ToDo; #150 and
+  #151, closed as not planned, Abandoned with WontFix and no Delivery).
+- **Completed and Done were carried over, not re-verified.** The standard says only a person sets them (09 §4.1). They
+  were taken from the old board, where the owner had them.
+- **Size, Priority and Area were guessed from the titles only** (there are no comments), at the owner's request, and
+  are not reliable: Size XS 12, S 57, M 40, L 31, XL 12; Priority High 19, Normal 115, Low 17, Wishlist 1; one to three
+  Area labels each. Priority is normally the project owner's call.
+- Issue bodies contain garbled dashes from the migration. Not changed.
+- The old board (project 2) was unlinked from the repository and closed.
+- The `All` view's sort and "Show hierarchy" setting are still to be made by hand.
