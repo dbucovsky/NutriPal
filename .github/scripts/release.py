@@ -25,6 +25,7 @@ NO_RELEASE = ("Version", "Alert")
 
 ITEMS = ("query($id:ID!,$after:String){node(id:$id){... on ProjectV2{items(first:100,after:$after){"
          "pageInfo{hasNextPage endCursor} nodes{id content{... on Issue{number issueType{name}}} "
+         "ticketType:fieldValueByName(name:\"Ticket type\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
          "delivery:fieldValueByName(name:\"Delivery\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
          "version:fieldValueByName(name:\"Version\"){... on ProjectV2ItemFieldTextValue{text}}}}}}}")
 
@@ -74,7 +75,7 @@ def releasable_tickets(project_client, board, version):
         page = project_client.graphql(ITEMS, {"id": board.id, "after": after})["node"]["items"]
         for node in page["nodes"]:
             content = node.get("content") or {}
-            if not content.get("number") or (content.get("issueType") or {}).get("name") in NO_RELEASE:
+            if not content.get("number") or (node.get("ticketType") or content.get("issueType") or {}).get("name") in NO_RELEASE:
                 continue
             if (node.get("delivery") or {}).get("name") not in RELEASABLE:
                 continue

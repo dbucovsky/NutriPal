@@ -36,6 +36,7 @@ TEXT, NUMBER, DATE, SELECT = "TEXT", "NUMBER", "DATE", "SINGLE_SELECT"
 # checks them, `fields.py` creates the missing ones, and a test compares this table with the guide.
 REQUIRED_FIELDS = {
     "Status": (SELECT, ["ToDo", "OnDeck", "InProgress", "Review", "Completed", "Suspended", "Abandoned"]),
+    "Ticket type": (SELECT, ["Feature", "Enhancement", "Change", "Bug", "Refactor", "Task", "Version", "Alert"]),
     "Origin": (SELECT, ["Backfilled", "Backdated"]),
     "REF": (TEXT, None),
     "Waiting": (SELECT, ["Needs input"]),

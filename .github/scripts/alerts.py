@@ -73,10 +73,10 @@ def stale_planned(repo_client, version):
         return []
     found = []
     for page in range(1, 11):
-        issues = repo_client.request("GET", repo_client.repo_path(f"/issues?state=open&type=Version&per_page=100&page={page}"))
+        issues = repo_client.request("GET", repo_client.repo_path(f"/issues?state=open&per_page=100&page={page}"))
         for issue in issues:
             match = _PLANNED.match(issue["title"])
-            if match and Version.parse("V" + match.group(1)).number() < version.number():
+            if match and "pull_request" not in issue and Version.parse("V" + match.group(1)).number() < version.number():
                 found.append((issue["number"], issue["title"]))
         if len(issues) < 100:
             break
@@ -93,7 +93,7 @@ def create_alert(run, repo_client, project_client, board, title, body, assignee=
         return number
     try:
         item = run.do(f"Alert \"{title}\": add to the board", project_client.add_to_project, board.id, created["node_id"] if created else None)
-        for name, value in (("Priority", "Critical"), ("Status", "ToDo")):
+        for name, value in (("Ticket type", "Alert"), ("Priority", "Critical"), ("Status", "ToDo")):
             run.do(f"Alert \"{title}\": set {name} to {value}", project_client.set_project_field, board.id, item,
                    board.fields[name]["id"], {"singleSelectOptionId": board.fields[name]["options"][value]})
     except (GitHubError, KeyError) as error:

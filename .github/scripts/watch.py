@@ -35,6 +35,7 @@ SITUATION = re.compile(r"<!-- attention:watch situation=(\S+) -->")
 ITEMS = ("query($id:ID!,$after:String){node(id:$id){... on ProjectV2{items(first:100,after:$after){"
          "pageInfo{hasNextPage endCursor} nodes{id updatedAt "
          "content{... on Issue{number issueType{name} comments(last:30){nodes{createdAt body}}}} "
+         "ticketType:fieldValueByName(name:\"Ticket type\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
          "status:fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
          "waiting:fieldValueByName(name:\"Waiting\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
          "attention:fieldValueByName(name:\"Attention\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
@@ -54,7 +55,7 @@ def board_tickets(project_client, board):
             if not content.get("number"):
                 continue
             found.append({"item": node["id"], "number": content["number"], "updated": node["updatedAt"],
-                          "type": (content.get("issueType") or {}).get("name"),
+                          "type": (node.get("ticketType") or content.get("issueType") or {}).get("name"),
                           "comments": (content.get("comments") or {}).get("nodes") or [],
                           "status": (node.get("status") or {}).get("name"),
                           "waiting": (node.get("waiting") or {}).get("name"),

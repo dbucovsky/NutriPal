@@ -53,9 +53,9 @@ def version_ticket(repo_client, version):
     """The Version ticket titled exactly `Version X.Y.Z`, closed (finalized) or not, or None."""
     title = f"Version {str(version)[1:]}"
     for page in range(1, 11):
-        issues = repo_client.request("GET", repo_client.repo_path(f"/issues?state=all&type=Version&per_page=100&page={page}"))
+        issues = repo_client.request("GET", repo_client.repo_path(f"/issues?state=all&per_page=100&page={page}"))
         for issue in issues:
-            if issue["title"] == title:
+            if issue["title"] == title and "pull_request" not in issue:
                 return issue
         if len(issues) < 100:
             return None

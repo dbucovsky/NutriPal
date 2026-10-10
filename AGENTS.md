@@ -5,13 +5,14 @@ the governance standard). Work from the checklist at the end of each guide.
 
 This project
 - Build: `npm run build` in `frontend/`. Tests: `python -m unittest discover -s tests` (the automation's tests,
-  expect `OK`) and `python .github/scripts/check_manifest.py` (the automation files; edited-locally files are
-  listed in `doc/2026-10-09_governance-nonconformities.md`).
+  expect `OK`) and `python .github/scripts/check_manifest.py` (expect all files unchanged). The manifest is the
+  project's own, so the files that differ from the standard are listed in `doc/2026-10-09_governance-nonconformities.md`;
+  after editing one, rewrite the manifest with `--update --standard V0.10.1` and update that list.
 - Hooks: activate them once per clone with `git config core.hooksPath .githooks`. Fetch the standard with
   `git submodule update --init`.
 - Local services (Apache, MySQL) are started and stopped by the owner through the XAMPP Control Panel, never by
   the assistant. `start-services.*` and `stop-services.*` are provided for the owner to run.
-- Ticket Type is a single-select `Type` field on the board, not the native issue type (the repository is
+- Ticket Type is a single-select `Ticket type` field on the board (GitHub reserves the name `Type`), not the native issue type (the repository is
   personal, so issue types are unavailable). The automation files that read it differ from the standard and
   are listed in the nonconformity record.
 - The changelog has no "Known bugs" or "Planned" sections: known bugs and planned work are tickets.

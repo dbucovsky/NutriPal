@@ -22,6 +22,7 @@ SKIPPED_TYPES = ("Version", "Alert")
 
 ITEMS = ("query($id:ID!,$after:String){node(id:$id){... on ProjectV2{items(first:100,after:$after){"
          "pageInfo{hasNextPage endCursor} nodes{id content{... on Issue{number issueType{name}}} "
+         "ticketType:fieldValueByName(name:\"Ticket type\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
          "version:fieldValueByName(name:\"Version\"){... on ProjectV2ItemFieldTextValue{text}} "
          "number:fieldValueByName(name:\"Version#\"){... on ProjectV2ItemFieldNumberValue{number}}}}}}}")
 
@@ -36,7 +37,7 @@ def board_items(project_client, board):
             if not content.get("number"):
                 continue
             found.append({"item": node["id"], "number": content["number"],
-                          "type": (content.get("issueType") or {}).get("name"),
+                          "type": (node.get("ticketType") or content.get("issueType") or {}).get("name"),
                           "version": ((node.get("version") or {}).get("text") or "").strip(),
                           "version_number": (node.get("number") or {}).get("number")})
         if not page["pageInfo"]["hasNextPage"]:

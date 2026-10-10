@@ -7,7 +7,7 @@
       "include_pull_requests": true,
       "sort_by": [["Created", "asc"]],
       "manual_steps": ["turn off \"Show hierarchy\", so that tickets are not listed inside their Version ticket and the list is flat"],
-      "visible_fields": ["Title", "Assignees", "Status", "Type", "Labels", "Origin", "REF", "Waiting", "Attention", "Resolution", "Delivery", "Priority", "Size", "Risk", "Version", "Build", "Version#", "Start date", "End date"]
+      "visible_fields": ["Title", "Assignees", "Status", "Ticket type", "Labels", "Origin", "REF", "Waiting", "Attention", "Resolution", "Delivery", "Priority", "Size", "Risk", "Version", "Build", "Version#", "Start date", "End date"]
     },
     {
       "name": "Backlog",
@@ -15,45 +15,45 @@
       "filter": "status:ToDo,OnDeck,Suspended",
       "vertical_group_by": "Status",
       "sort_by": [["Priority", "asc"]],
-      "visible_fields": ["Title", "Priority", "Size", "Risk", "Version", "Assignees", "Type"]
+      "visible_fields": ["Title", "Priority", "Size", "Risk", "Version", "Assignees", "Ticket type"]
     },
     {
       "name": "Board",
       "layout": "board",
-      "filter": "is:open AND -type:Version AND -status:ToDo,Suspended",
+      "filter": "is:open AND -ticket-type:Version AND -status:ToDo,Suspended",
       "group_by": "Version",
       "vertical_group_by": "Status",
       "sort_by": [["Priority", "asc"]],
-      "visible_fields": ["Title", "Priority", "Size", "Assignees", "Waiting", "Attention", "Type"]
+      "visible_fields": ["Title", "Priority", "Size", "Assignees", "Waiting", "Attention", "Ticket type"]
     },
     {
       "name": "Decide",
       "layout": "table",
-      "filter": "attention:Watch,Caution,AtRisk OR (type:Alert AND is:open)",
+      "filter": "attention:Watch,Caution,AtRisk OR (ticket-type:Alert AND is:open)",
       "sort_by": [["Priority", "asc"]],
-      "visible_fields": ["Title", "Assignees", "Status", "Type", "Attention", "Priority"]
+      "visible_fields": ["Title", "Assignees", "Status", "Ticket type", "Attention", "Priority"]
     },
     {
       "name": "Follow up",
       "layout": "table",
       "filter": "has:waiting OR status:Review",
       "sort_by": [["Priority", "asc"]],
-      "visible_fields": ["Title", "Assignees", "Status", "Waiting", "Type", "Priority"]
+      "visible_fields": ["Title", "Assignees", "Status", "Waiting", "Ticket type", "Priority"]
     },
     {
       "name": "Fix",
       "layout": "table",
       "filter": "has:fix",
       "sort_by": [["Priority", "asc"]],
-      "visible_fields": ["Title", "Assignees", "Fix", "Status", "Resolution", "Delivery", "Version", "End date", "REF", "Type", "Priority"]
+      "visible_fields": ["Title", "Assignees", "Fix", "Status", "Resolution", "Delivery", "Version", "End date", "REF", "Ticket type", "Priority"]
     },
     {
       "name": "Versions",
       "layout": "table",
-      "filter": "has:version AND -type:Version",
+      "filter": "has:version AND -ticket-type:Version",
       "group_by": "Parent issue",
       "sort_by": [["Version#", "asc"], ["Priority", "asc"]],
-      "visible_fields": ["Title", "Status", "Type", "Delivery", "Build", "Resolution", "Version", "Priority"]
+      "visible_fields": ["Title", "Status", "Ticket type", "Delivery", "Build", "Resolution", "Version", "Priority"]
     }
   ]
 }

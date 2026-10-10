@@ -1,6 +1,13 @@
 # Changelog
 
 ## WIP-Version
+### Build 20261010155153 (branch ticket-type-field)
+#### REF 20261010154000 — no ticket yet (ticket Type as a board field; the board has no tickets of its own yet)
+- automation: the ticket Type is read from the board's `Ticket type` field first, then from the issue's own type. Changed `conditions.py`, `dates.py`, `release.py`, `version_numbers.py`, `watch.py` (board queries), `finalize.py` and `hotfix.py` (a `BoardTypes` source for the bump), `alerts.py` and `finalize.py` (new Version and Alert tickets get their `Ticket type` on the board), `github_api.py` (an issue the repository refuses a type for is created without it; the board's REST paths follow the owner, `/users/<name>` for a personal account), `alerts.py` and `implemented.py` (Version tickets are found by title, not by the issue type filter) and `preflight.py` (the board must have the `Ticket type` field).
+- board: `views.json` uses `Ticket type` (filters `ticket-type:`); the seven saved views were created on the new board.
+- tests: added `tests/test_ticket_type.py`; `test_checks.py` and `test_views.py` follow the new Version-ticket query, views filters and REST paths; the manifest was rewritten for the edited files.
+- documentation: `AGENTS.md` names the field `Ticket type`; the nonconformity record lists every edited automation file.
+
 ### Build 20261010033411 (branch governance-board)
 #### REF 20261010020000 — no ticket yet (the board does not exist as tickets yet)
 - changelog: finalized the merged adoption by hand as V0.15.0 (sub bump), because the versioning workflow is disabled until the Type-field step.

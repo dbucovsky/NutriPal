@@ -24,6 +24,7 @@ CHANGELOG = "CHANGELOG.md"
 
 ITEM_QUERY = ("query($o:String!,$n:String!,$num:Int!){repository(owner:$o,name:$n){issue(number:$num){"
               "id title projectItems(first:20){nodes{id project{id} "
+              "ticketType:fieldValueByName(name:\"Ticket type\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
               "status:fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
               "delivery:fieldValueByName(name:\"Delivery\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
               "version:fieldValueByName(name:\"Version\"){... on ProjectV2ItemFieldTextValue{text}} "
@@ -72,6 +73,25 @@ def ticket_builds(section):
             if block.kind == "ticket" and build.stamp and build.stamp > latest.get(block.number, ""):
                 latest[block.number] = build.stamp
     return latest
+
+
+class BoardTypes:
+    """Where a ticket's Type comes from: the board's `Ticket type` field first (a personal repository has no
+    issue types), then the issue's own type when it has one."""
+
+    def __init__(self, repo_client, project_client=None, board=None):
+        self.repo_client, self.project_client, self.board = repo_client, project_client, board
+
+    def issue_type(self, number):
+        if self.board is not None and self.project_client is not None:
+            try:
+                _, item = board_item(self.project_client, self.board, number)
+            except GitHubError:
+                item = None
+            name = ((item or {}).get("ticketType") or {}).get("name")
+            if name:
+                return name
+        return self.repo_client.issue_type(number)
 
 
 def decide(sections, repo_client):
@@ -143,7 +163,8 @@ def record_version_ticket(run, repo_client, project_client, board, version, when
     if board and project_client:
         try:
             item_id = run.do(f"{title}: add to the board", project_client.add_to_project, board.id, node_id)
-            for name, text, value in (("Delivery", delivery, {"singleSelectOptionId": board.fields["Delivery"]["options"][delivery]}),
+            for name, text, value in (("Ticket type", "Version", {"singleSelectOptionId": board.fields["Ticket type"]["options"]["Version"]}),
+                                      ("Delivery", delivery, {"singleSelectOptionId": board.fields["Delivery"]["options"][delivery]}),
                                       ("Version", str(version), {"text": str(version)}),
                                       ("Build", last_build, {"text": last_build}),
                                       ("Version#", str(version.number()), {"number": float(version.number())})):
@@ -192,13 +213,14 @@ def finalize(root, repo_client, project_client=None, board=None, now=None, pull_
         return run
     if wip is not None:
         target = wip
-        version, types, bump = decide(sections, repo_client)
+        version, types, bump = decide(sections, BoardTypes(repo_client, project_client, board))
         tickets = target.ticket_numbers()
         when = versions.heading_time(now)
     else:
         target, version, when = previous, previous.version, previous.time
         tickets = target.ticket_numbers()
-        types = {n: repo_client.issue_type(n) for n in tickets}
+        source = BoardTypes(repo_client, project_client, board)
+        types = {n: source.issue_type(n) for n in tickets}
         bump = recorded_bump(sections)
         run.log.append(f"no open WIP-Version heading: re-checking {version}")
     if wip is not None:

@@ -182,6 +182,7 @@ def fix_value(broken):
 ITEMS = ("query($id:ID!,$after:String){node(id:$id){... on ProjectV2{items(first:100,after:$after){"
          "pageInfo{hasNextPage endCursor} nodes{id updatedAt "
          "content{... on Issue{number state updatedAt issueType{name}}} "
+         "ticketType:fieldValueByName(name:\"Ticket type\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
          "status:fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
          "resolution:fieldValueByName(name:\"Resolution\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
          "waiting:fieldValueByName(name:\"Waiting\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
@@ -209,7 +210,7 @@ def board_tickets(project_client, board):
 
             found.append({"item": node["id"], "number": content["number"], "item_updated": node["updatedAt"],
                           "issue_updated": content["updatedAt"], "state": content["state"],
-                          "type": (content.get("issueType") or {}).get("name"),
+                          "type": (node.get("ticketType") or content.get("issueType") or {}).get("name"),
                           "status": name("status"), "delivery": name("delivery"), "resolution": name("resolution"), "waiting": name("waiting"),
                           "origin": name("origin"), "attention": name("attention"),
                           "ref": (node.get("ref") or {}).get("text") or "",
