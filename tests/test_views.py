@@ -84,7 +84,7 @@ class ConditionViewsTests(unittest.TestCase):
                          ["All", "Backlog", "Board", "Decide", "Follow up", "Fix", "Versions"])
 
     def test_decide_lists_the_open_attention_flags_and_the_open_alerts(self):
-        self.assertEqual(self.view("Decide")["filter"], "attention:Watch,Caution,AtRisk OR (type:Alert AND is:open)")
+        self.assertEqual(self.view("Decide")["filter"], "attention:Watch,Caution,AtRisk OR (ticket-type:Alert AND is:open)")
 
     def test_follow_up_lists_what_waits_for_an_answer_or_a_verification(self):
         self.assertEqual(self.view("Follow up")["filter"], "has:waiting OR status:Review")
@@ -397,16 +397,19 @@ class ClientTests(unittest.TestCase):
         client = Client("t", "owner/repo", transport)
         client.create_view(7, {"name": "X"})
         client.delete_view("V1")
-        self.assertEqual(seen[0][:2], ("POST", "https://api.github.com/orgs/owner/projectsV2/7/views"))
-        self.assertEqual(seen[0][2], {"name": "X"})
-        self.assertIn("deleteProjectV2View", seen[1][2]["query"])
-        self.assertEqual(seen[1][2]["variables"], {"v": "V1"})
+        self.assertEqual(seen[0][:2], ("GET", "https://api.github.com/users/owner"))  # the owner is looked up first
+        self.assertEqual(seen[1][:2], ("POST", "https://api.github.com/users/owner/projectsV2/7/views"))
+        self.assertEqual(seen[1][2], {"name": "X"})
+        self.assertIn("deleteProjectV2View", seen[2][2]["query"])
+        self.assertEqual(seen[2][2]["variables"], {"v": "V1"})
 
     def test_field_ids_join_graphql_and_rest(self):
         def transport(method, url, headers, body):
             if url.endswith("/graphql"):
                 nodes = [{"databaseId": 10, "name": "Updated"}, {}, {"databaseId": 11, "name": "Title"}]
                 return 200, json.dumps({"data": {"node": {"fields": {"nodes": nodes}}}}), {}
+            if url.endswith("/users/owner"):
+                return 200, json.dumps({"type": "User", "id": 1}), {}
             return 200, json.dumps([{"id": 11, "name": "Title"}, {"id": 12, "name": "Type"}]), {}
 
         ids = Client("t", "owner/repo", transport).view_field_ids("P7", 7)

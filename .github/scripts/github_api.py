@@ -83,9 +83,17 @@ class Client:
         return issue_type["name"] if issue_type else None
 
     def create_issue(self, title, body, issue_type=None, labels=(), assignees=()):
+        """Create an issue. Issue types exist only in an organization, so if the repository refuses `type` the
+        issue is created without it: the Type is then recorded in the board's `Ticket type` field by the caller."""
         data = {"title": title, "body": body, "labels": list(labels), "assignees": list(assignees)}
         if issue_type:
             data["type"] = issue_type
+            try:
+                return self.request("POST", self.repo_path("/issues"), data)
+            except GitHubError as error:
+                if error.status != 422:
+                    raise
+                del data["type"]
         return self.request("POST", self.repo_path("/issues"), data)
 
     def close_issue(self, number, reason="completed"):
@@ -185,15 +193,21 @@ class Client:
         query = "query($id:ID!){node(id:$id){... on ProjectV2{fields(first:50){nodes{... on ProjectV2FieldCommon{databaseId name}}}}}}"
         ids = {f["name"]: f["databaseId"] for f in self.graphql(query, {"id": project_id})["node"]["fields"]["nodes"]
                if f and f.get("name") and f.get("databaseId")}
-        owner = self.repo.split("/")[0]
-        for f in self.request("GET", f"/orgs/{owner}/projectsV2/{number}/fields?per_page=100") or []:
+        for f in self.request("GET", f"{self.project_base()}/projectsV2/{number}/fields?per_page=100") or []:
             ids.setdefault(f["name"], f["id"])
         return ids
 
+    def project_base(self):
+        """The REST path of the board's owner: `/orgs/<name>` for an organization, `/users/<name>` for a personal account."""
+        owner = self.repo.split("/")[0]
+        info = self.request("GET", f"/users/{owner}")
+        if info.get("type") == "Organization":
+            return f"/orgs/{owner}"
+        return f"/users/{owner}"
+
     def create_view(self, number, body):
         """Create a view (REST). `body`: name, layout, filter and, as numeric field ids, visible_fields, sort_by, group_by, vertical_group_by."""
-        owner = self.repo.split("/")[0]
-        return self.request("POST", f"/orgs/{owner}/projectsV2/{number}/views", body)
+        return self.request("POST", f"{self.project_base()}/projectsV2/{number}/views", body)
 
     def delete_view(self, view_id):
         return self.graphql("mutation($v:ID!){deleteProjectV2View(input:{viewId:$v}){clientMutationId}}", {"v": view_id})

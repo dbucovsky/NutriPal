@@ -206,7 +206,7 @@ class FakeRepoClient:
     def request(self, method, path, body=None):
         if "/pulls" in path:
             return [{"number": 1}] if self.prs else []
-        if "type=Version" in path:
+        if "/issues?state=open" in path:
             return self.planned
         if "/comments" in path:
             return self.existing_comments

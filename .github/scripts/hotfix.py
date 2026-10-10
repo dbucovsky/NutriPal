@@ -79,7 +79,8 @@ def finish(root, repo_client, project_client, board, version, branch, now=None, 
     path = os.path.join(root, CHANGELOG)
     tag = release.tag_name(version, trial)
     tickets = wip.ticket_numbers()
-    types = {n: repo_client.issue_type(n) for n in tickets}
+    source = finalize.BoardTypes(repo_client, project_client, board)
+    types = {n: source.issue_type(n) for n in tickets}
     titles = {b.number: b.title for b in wip.blocks() if b.kind == "ticket"}
     builds = finalize.ticket_builds(wip)
     last_build = wip.last_build()

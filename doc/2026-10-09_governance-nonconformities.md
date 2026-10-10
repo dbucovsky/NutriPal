@@ -120,3 +120,30 @@ files as edited locally. That report is expected and is the record of this depar
   expected for a personal account. The saved views are not created yet; this is part of the Type-field step.
 - The token used for these runs was the owner's `gh` login, not `PROJECT_TOKEN`. The preflight warned that it has no
   expiry date; `PROJECT_TOKEN` itself was not exercised and still needs its own preflight run.
+
+## Type-field step (2026-10-10)
+
+Done on branch `ticket-type-field`. The Type of a ticket is the board's `Ticket type` field, read first; the issue's
+own type is the fallback (so the code works unchanged if the repository ever moves to an organization).
+
+Files that now differ from the standard. Because the project's tests require the manifest to match the project's own files, the manifest was rewritten (`--update --standard V0.10.1`) and no longer shows the difference, so this table is the record; compare with `doc/governance/` to see each edit:
+
+| File | Edit |
+|---|---|
+| `.github/scripts/conditions.py`, `dates.py`, `release.py`, `version_numbers.py`, `watch.py` | board queries also read `Ticket type`; the Type is that value, else the issue type |
+| `.github/scripts/finalize.py`, `hotfix.py` | new `BoardTypes` source for the version bump; new Version tickets get their `Ticket type` set |
+| `.github/scripts/alerts.py` | new Alerts get `Ticket type` Alert; stale planned versions are found by title (no `type=Version` filter) |
+| `.github/scripts/implemented.py` | the Version ticket is found by title (no `type=Version` filter) |
+| `.github/scripts/github_api.py` | an issue the repository refuses a type for (HTTP 422) is created without it; the board's REST paths use `/users/<name>` for a personal account |
+| `.github/scripts/preflight.py` | `Ticket type` is a required board field |
+| `.github/views.json` | `Ticket type` replaces `Type`; the filters use `ticket-type:` |
+| `tests/test_automation_library.py` | the repository-changelog test (earlier) |
+| `tests/test_checks.py` | the fake follows the new Version-ticket query |
+| `tests/test_ticket_type.py` | new: covers only these departures |
+
+Verified against the live board: the changed queries read all 152 tickets' types, and `views.py` created the seven
+saved views (a second run reports them up to date). The `All` view's sort (Created, ascending) and its "Show
+hierarchy" setting are still to be made by hand in the web interface.
+
+Not yet verified live: finalize and hotfix against a real merge, a new Alert or Version ticket getting its
+`Ticket type`, and `PROJECT_TOKEN` itself. The first of these happens when the versioning workflow is switched on.
