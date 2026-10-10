@@ -1,0 +1,3 @@
+[submodule "doc/governance"]
+	path = doc/governance
+	url = https://github.com/The-Shadow-on-the-Moon/governance.git

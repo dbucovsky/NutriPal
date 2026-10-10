@@ -1,5 +1,9 @@
 # Changelog
 
+## V0.14.2 — 2026-10-09
+### Changes
+- Added the governance project as a git submodule at `doc/governance` (branch `governance`). Clone with `--recurse-submodules` or run `git submodule update --init`.
+
 ## V0.14.1 — 2026-09-11 16:30
 ### Changes
 - **Fix nutrition sync silently corrupting displayed kcal on ratio-matched foods** (#128)
