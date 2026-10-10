@@ -1,6 +1,6 @@
 # Changelog
 
-## WIP-Version
+## V0.15.2 — 2026-10-10 18:10 UTC
 ### Build 20261010180113 (branch backfill-record)
 #### REF 20261010170000 — no ticket yet (record of the board backfill)
 - changelog: finalized the merged work by hand as V0.15.1 (mod bump), because the versioning workflow is still disabled.
