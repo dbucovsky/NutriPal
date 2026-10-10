@@ -1,6 +1,12 @@
 # Changelog
 
 ## WIP-Version
+### Build 20261010033411 (branch governance-board)
+#### REF 20261010020000 — no ticket yet (the board does not exist as tickets yet)
+- changelog: finalized the merged adoption by hand as V0.15.0 (sub bump), because the versioning workflow is disabled until the Type-field step.
+- documentation: added the board log to `doc/2026-10-09_governance-nonconformities.md` (the new board's fields, the reserved `Type` name, and the saved views that cannot be created yet).
+
+## V0.15.0 — 2026-10-10 02:06 UTC
 ### Build 20261010014449 (branch governance-adoption)
 #### REF 20261010004500 — no ticket yet (adopting the governance standard; the board does not exist yet)
 - governance: added the standard as a git submodule at `doc/governance` (branch `governance`), and `AGENTS.md` pointing to it.

@@ -104,3 +104,19 @@ files as edited locally. That report is expected and is the record of this depar
   template in the personal instructions only in `actions/checkout@v7` instead of `@v4`, and comments removed.
 - **Old board.** Not yet replaced. Needs the token and the fields script.
 - **`tests/test_automation_library.py` edited.** `test_the_repository_changelog_parses` asserted the standard's own changelog (versions V0.1.0, V0.2.0 and their tickets); it now asserts this project's. `check_manifest.py` will report the file as edited locally.
+
+## Board log (2026-10-09)
+
+- Merged: pull request #153. The Versioning workflow is disabled by hand in the Actions settings.
+- New board: project 6, "NutriPal (governed)", linked to the repository. The old board (project 2) was unlinked so
+  the preflight sees one board, and is kept until the backfill is done, then archived.
+- `fields.py` created the 15 missing fields; the preflight passes ("all 16 fields and their values are present").
+  The `Status` values were set through the API (`updateProjectV2Field`), which worked even though the script says to
+  do it by hand.
+- **The board field cannot be named `Type`.** GitHub reserves the name (it is the built-in issue-type column), so the
+  field is `Ticket type` (Feature, Enhancement, Change, Bug, Refactor, Task, Version, Alert). The Type-field edits
+  must read `Ticket type`, and the saved-view filters need `ticket-type` rather than `type:`.
+- **`views.py` fails with a 404.** It calls organization-only REST endpoints (`/orgs/{owner}/projectsV2/...`), as
+  expected for a personal account. The saved views are not created yet; this is part of the Type-field step.
+- The token used for these runs was the owner's `gh` login, not `PROJECT_TOKEN`. The preflight warned that it has no
+  expiry date; `PROJECT_TOKEN` itself was not exercised and still needs its own preflight run.
