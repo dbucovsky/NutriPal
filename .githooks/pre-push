@@ -1,0 +1,11 @@
+#!/bin/sh
+# Entry script: the logic is in hooks.py. It warns and never blocks.
+dir=$(dirname "$0")
+for c in python3 python; do
+  if "$c" -c 'import sys; sys.exit(sys.version_info < (3, 8))' >/dev/null 2>&1; then
+    "$c" "$dir/hooks.py" pre-push "$@" || echo "hooks: pre-push error ignored" >&2
+    exit 0
+  fi
+done
+echo "hooks: Python 3 not found, pre-push hook skipped" >&2
+exit 0

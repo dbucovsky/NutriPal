@@ -1,0 +1,507 @@
+name: Versioning
+
+# On a pull request: the pull request is put on the board (a failure there never fails the run), then the advisory check.
+# On a push to another branch: the preflight, the fallback for skipped hooks, then the push step (Delivery, Progress, Build, Attention).
+# On a push to main: the preflight, then bypass detection, the finalize step, the stale-version check, the Version# sweep, the date sweep, the Watch flags and the refresh of the Fix field.
+# Three times a day (08:17, 16:17 and 20:17 UTC: 4am, noon and 4pm ET in summer time, an hour earlier in winter) and on request with mode "scheduled":
+#   the preflight, the Implemented tickets, the Version# sweep, the date sweep, the Watch flags and the refresh of the Fix field. The scheduled run never commits to a branch.
+# The main job and the scheduled job share one concurrency group, so a merge and a scheduled run never overlap (the second waits).
+# On an issue event (edited, closed, reopened, assigned, labeled) or a comment on an issue (created, edited, which includes the tick of a box in the
+#   automation's own comment), caused by someone with write access: the same as mode "conditions" below, for the whole board, so a closed issue or a tick
+#   shows at once. The job "team" decides who may start it (see there).
+# On request with mode "conditions": the preflight, the attaching of the Implemented tickets (so that a ticket waiting for its Version is not shown as broken) and the refresh of the Fix field (what each ticket breaks, see conditions.py), a dry run unless told otherwise.
+# On request with mode "finalize": the preflight and the finalize step, as a dry run unless told otherwise (safe to repeat).
+# On request with mode "release", "hotfix" or "retire": the preflight and that step, as a dry run unless told otherwise.
+#   A hotfix is finished from its own branch (start the workflow from that branch).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches:
+      - '**'
+  issues:
+    types: [edited, closed, reopened, assigned, labeled]
+  issue_comment:
+    types: [created, edited]
+  schedule:
+    - cron: '17 8 * * *'
+    - cron: '17 16 * * *'
+    - cron: '17 20 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'What to run (release, hotfix and retire need the inputs below)'
+        type: choice
+        options:
+          - finalize
+          - scheduled
+          - conditions
+          - release
+          - hotfix
+          - retire
+        default: finalize
+      dry_run:
+        description: 'Only report what the steps would do'
+        type: boolean
+        default: true
+      version:
+        description: 'release: the finalized version (empty for the latest); hotfix: the hotfix version, for example V1.25.0-HF1'
+        type: string
+        required: false
+      branch:
+        description: 'retire: the branch to retire (a hotfix is finished from the hotfix branch itself: run from it)'
+        type: string
+        required: false
+      outcome:
+        description: 'retire: what became of the branch'
+        type: choice
+        options:
+          - archived
+          - suspended
+          - abandoned
+        default: archived
+      confirm:
+        description: 'retire: the branch name typed again'
+        type: string
+        required: false
+      comment:
+        description: 'retire: an optional short comment for the tag, in kebab-case'
+        type: string
+        required: false
+      trial:
+        description: 'release, hotfix and retire: tick it ONLY when testing the automation with throwaway material; the tag is then made under test/ (test/released/..., test/abandoned/...) and the real namespaces stay untouched. Left unticked, a real tag is made.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  team:
+    # Decides whether an issue event or a comment may start the refresh. The repository is public and the job "conditions" holds secrets, so a stranger's
+    # comment must never reach it. This job has no secret of its own (only the workflow token, to ask the API) and no concurrency group, so a stranger's run
+    # ends here and cannot take the place of a real one. The person is asked about by permission, not by the association in the event, because the
+    # association is computed without a viewer and shows a private member of the organization as an outsider. Event data reaches the script only
+    # through environment variables, never written into the command.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'conditions')
+      || github.event_name == 'issues'
+      || (github.event_name == 'issue_comment' && !github.event.issue.pull_request)
+    runs-on: ubuntu-latest
+    outputs:
+      allowed: ${{ steps.who.outputs.allowed }}
+    steps:
+      - name: Does the person who caused this have write access?
+        id: who
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          SENDER: ${{ github.event.sender.login }}
+          ASSOCIATION: ${{ github.event.issue.author_association }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          echo "event: $EVENT, sender: $SENDER, association in the payload: ${ASSOCIATION:-none}"
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          permission=$(gh api "repos/$REPOSITORY/collaborators/$SENDER/permission" --jq .permission 2>/dev/null || echo none)
+          echo "permission of $SENDER: $permission"
+          case "$permission" in
+            admin|write) echo "allowed=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "allowed=false" >> "$GITHUB_OUTPUT"; echo "not started: $SENDER has no write access" ;;
+          esac
+
+  advisory:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the pull request
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Put the pull request on the board
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          PULL_REQUEST: ${{ github.event.pull_request.number }}
+          PULL_REQUEST_NODE_ID: ${{ github.event.pull_request.node_id }}
+        run: python3 .github/scripts/board_pull_requests.py
+
+      - name: Advisory check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PULL_REQUEST: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch origin main
+          python3 .github/scripts/advisory.py
+
+  branch:
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main' && !github.event.deleted
+    runs-on: ubuntu-latest
+    concurrency:
+      group: versioning-branch-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+    steps:
+      - name: Checkout the branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set the commit author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Preflight
+        run: python3 .github/scripts/preflight.py
+
+      - name: Fill in a build heading left by skipped hooks
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+        run: python3 .github/scripts/skipped_hooks.py
+
+      - name: Push step
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: AFTER_SHA=$(git rev-parse HEAD) python3 .github/scripts/push_step.py
+
+  main:
+    # The automation's own commits start with "Finalize" or "Flag bypass"; skipping them avoids a loop.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'finalize') ||
+      (github.event_name == 'push' &&
+       github.ref == 'refs/heads/main' &&
+       !startsWith(github.event.head_commit.message, 'Finalize ') &&
+       !startsWith(github.event.head_commit.message, 'Flag bypass'))
+    runs-on: ubuntu-latest
+    concurrency:
+      group: versioning-board
+      cancel-in-progress: false
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          # The project token belongs to an administrator, so the automation's commits can go to main.
+          token: ${{ secrets.PROJECT_TOKEN || github.token }}
+
+      - name: Set the commit author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Preflight
+        run: python3 .github/scripts/preflight.py
+
+      - name: Detect a bypass
+        if: github.event_name == 'push'
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          PUSHER: ${{ github.actor }}
+        run: python3 .github/scripts/bypass.py
+
+      - name: Finalize the version
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/finalize.py --dry-run
+          else
+            python3 .github/scripts/finalize.py
+          fi
+
+      - name: Check for stale planned versions
+        if: github.event_name == 'push' || inputs.dry_run == false
+        run: python3 .github/scripts/bypass.py stale
+
+      - name: Set Version# from Version
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/version_numbers.py --dry-run
+          else
+            python3 .github/scripts/version_numbers.py
+          fi
+
+      - name: Sweep the dates
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/dates.py --dry-run
+          else
+            python3 .github/scripts/dates.py
+          fi
+
+      - name: Flag stale tickets
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/watch.py --dry-run
+          else
+            python3 .github/scripts/watch.py
+          fi
+
+      - name: Refresh the conditions
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/conditions.py --dry-run
+          else
+            python3 .github/scripts/conditions.py
+          fi
+
+      - name: End red if a board write failed, otherwise stamp the board
+        if: always()
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/board_status.py --job-status "${{ job.status }}" --dry-run
+          else
+            python3 .github/scripts/board_status.py --job-status "${{ job.status }}"
+          fi
+
+  scheduled:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'scheduled')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: versioning-board
+      cancel-in-progress: false
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Preflight
+        run: python3 .github/scripts/preflight.py
+
+      - name: Attach Implemented tickets to their versions
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/implemented.py --dry-run
+          else
+            python3 .github/scripts/implemented.py
+          fi
+
+      - name: Set Version# from Version
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/version_numbers.py --dry-run
+          else
+            python3 .github/scripts/version_numbers.py
+          fi
+
+      - name: Sweep the dates
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/dates.py --dry-run
+          else
+            python3 .github/scripts/dates.py
+          fi
+
+      - name: Flag stale tickets
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/watch.py --dry-run
+          else
+            python3 .github/scripts/watch.py
+          fi
+
+      - name: Refresh the conditions
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/conditions.py --dry-run
+          else
+            python3 .github/scripts/conditions.py
+          fi
+
+      - name: End red if a board write failed, otherwise stamp the board
+        if: always()
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/board_status.py --job-status "${{ job.status }}" --dry-run
+          else
+            python3 .github/scripts/board_status.py --job-status "${{ job.status }}"
+          fi
+
+  conditions:
+    # On request, or when the job "team" found that the person who caused an issue event or a comment has write access.
+    needs: team
+    if: ${{ always() && needs.team.outputs.allowed == 'true' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: versioning-board
+      cancel-in-progress: false
+    env:
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Preflight
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: python3 .github/scripts/preflight.py
+
+      - name: Attach Implemented tickets to their versions
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/implemented.py --dry-run
+          else
+            python3 .github/scripts/implemented.py
+          fi
+
+      - name: Refresh the conditions
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/conditions.py --dry-run
+          else
+            python3 .github/scripts/conditions.py
+          fi
+
+      - name: End red if a board write failed, otherwise stamp the board
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/board_status.py --job-status "${{ job.status }}" --dry-run
+          else
+            python3 .github/scripts/board_status.py --job-status "${{ job.status }}"
+          fi
+
+  release:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'release'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: versioning-release
+      cancel-in-progress: false
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      VERSION: ${{ inputs.version }}
+      TRIAL: ${{ inputs.trial }}
+    steps:
+      - name: Checkout the ref the run was started from
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Preflight
+        run: python3 .github/scripts/preflight.py
+
+      - name: Release the version
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/release.py --dry-run
+          else
+            python3 .github/scripts/release.py
+          fi
+
+  hotfix:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'hotfix' && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: versioning-hotfix-${{ github.ref_name }}
+      cancel-in-progress: false
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      VERSION: ${{ inputs.version }}
+      TRIAL: ${{ inputs.trial }}
+      BRANCH: ${{ github.ref_name }}
+    steps:
+      - name: Checkout the hotfix branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set the commit author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Preflight
+        run: python3 .github/scripts/preflight.py
+
+      - name: Finish the hotfix
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/hotfix.py --dry-run
+          else
+            python3 .github/scripts/hotfix.py
+          fi
+
+  retire:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'retire'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: versioning-retire
+      cancel-in-progress: false
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      BRANCH: ${{ inputs.branch }}
+      OUTCOME: ${{ inputs.outcome }}
+      CONFIRM: ${{ inputs.confirm }}
+      COMMENT: ${{ inputs.comment }}
+      TRIAL: ${{ inputs.trial }}
+    steps:
+      - name: Checkout the ref the run was started from
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Preflight
+        run: python3 .github/scripts/preflight.py
+
+      - name: Retire the branch
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/retire.py --dry-run
+          else
+            python3 .github/scripts/retire.py
+          fi

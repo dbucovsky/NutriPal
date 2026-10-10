@@ -31,3 +31,9 @@ nutripal.code-workspace
 # Real personal data exports (Takeout zips, Health Connect export) used to
 # test the importers against real data — never committed.
 /ref/
+
+# Python
+__pycache__/
+*.pyc
+desktop.ini
+.anchor

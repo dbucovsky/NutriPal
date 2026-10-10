@@ -1,0 +1,37 @@
+name: Re-enable Scheduled Workflow
+
+# GitHub disables the scheduled workflows of a public repository after 60 days without repository activity, and a
+# disabled workflow runs on no event. This workflow has no schedule, so it is never disabled: on any push it turns
+# versioning.yml back on if (and only if) GitHub switched it off for inactivity. A workflow disabled by a person stays so.
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Only report what the step would do'
+        type: boolean
+        default: true
+
+permissions:
+  actions: write
+
+jobs:
+  reenable:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Turn versioning.yml back on if GitHub switched it off for inactivity
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 .github/scripts/reenable_schedule.py --dry-run
+          else
+            python3 .github/scripts/reenable_schedule.py
+          fi

@@ -5,3 +5,14 @@ A web app for accessing and analyzing personal health data from Google Health (f
 The database schema, data ingestion (Health Connect bulk import + live Google Health API sync), and a full React/PHP application (Nutrition, Heart Rate, Sleep, Exercise, Weight, Steps tabs, plus Sync/Settings/FAQ) are built and running against real data.
 
 See [`CHANGELOG.md`](CHANGELOG.md) for project history, [`doc/wiki/`](doc/wiki/) for documentation, and the [GitHub project board](https://github.com/users/dbucovsky/projects/2) / [issues](https://github.com/dbucovsky/NutriPal/issues) for tracked work and open items.
+
+## Setup
+
+After cloning, fetch the governance standard and activate the local hooks (they stamp the build, draft the commit message and warn):
+
+```
+git submodule update --init
+git config core.hooksPath .githooks
+```
+
+Check with `git config core.hooksPath`, which should print `.githooks`. The hooks need Python 3. The process guides are in [`doc/governance/guides/`](doc/governance/guides/README.md).

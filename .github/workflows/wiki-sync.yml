@@ -16,10 +16,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Main Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Checkout Wiki Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ github.repository }}.wiki
           path: wiki-repo-tmp
@@ -28,14 +28,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Copy your updated docs into the temporary wiki repo folder
           cp -r doc/wiki/* wiki-repo-tmp/
-          
+
           cd wiki-repo-tmp
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          
-          # Stage, commit, and push if changes exist
+
           git add .
           if ! git diff-index --quiet HEAD; then
             git commit -m "Auto-update wiki: ${{ github.sha }}"
