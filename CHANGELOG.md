@@ -1,6 +1,6 @@
 # Changelog
 
-## WIP-Version
+## V0.15.3 — 2026-10-11 02:44 UTC
 ### Build 20261011014402 (branch record-live-checks)
 #### #207 — Rebuild the changelog history with real commits and per-ticket blocks
 - changelog: the history from V0.0.0 to V0.14.2 now has the standard's structure. Each ticket bullet is a `#### #N — <issue title>` block; each version's build heading is the real commit (`### Build <commit UTC time> (branch main, commit <hash>)`), shared by the versions that one commit carried (V0.0.17 to V0.0.21, V0.11.0 and V0.12.0); V0.13.0 has two builds. The 48 REF wrappers are gone. The wording of every entry is unchanged (all 229 lines checked), and the 7 remaining REF blocks are the five placeholders of V0.15.x and the open version, V0.14.2, and two untracked UI changes of V0.8.0.
