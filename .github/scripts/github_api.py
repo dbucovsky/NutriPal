@@ -150,14 +150,27 @@ class Client:
 
     def create_field(self, project_id, name, data_type, options=()):
         """Create a board field of `data_type` (TEXT, NUMBER, DATE or SINGLE_SELECT); `options` is [(name, color)]
-        for a single-select field. Returns the new field's id and name."""
+        or [(name, color, description)] for a single-select field. Returns the new field's id and name."""
         query = ("mutation($p:ID!,$n:String!,$t:ProjectV2CustomFieldType!,$o:[ProjectV2SingleSelectFieldOptionInput!]){"
                  "createProjectV2Field(input:{projectId:$p,name:$n,dataType:$t,singleSelectOptions:$o})"
                  "{projectV2Field{... on ProjectV2Field{id name} ... on ProjectV2SingleSelectField{id name}}}}")
         variables = {"p": project_id, "n": name, "t": data_type}
         if data_type == "SINGLE_SELECT":
-            variables["o"] = [{"name": option, "color": color, "description": ""} for option, color in options]
+            variables["o"] = [{"name": o[0], "color": o[1], "description": o[2] if len(o) > 2 else ""} for o in options]
         return self.graphql(query, variables)["createProjectV2Field"]["projectV2Field"]
+
+    def set_options(self, field_id, options):
+        """Replace the options of a single-select field. `options` is [(id or None, name, color, description)]: an
+        option sent with its id keeps that id, so the tickets that hold it keep their value; one without is new."""
+        query = ("mutation($f:ID!,$o:[ProjectV2SingleSelectFieldOptionInput!]){updateProjectV2Field("
+                 "input:{fieldId:$f,singleSelectOptions:$o}){projectV2Field{... on ProjectV2SingleSelectField{id}}}}")
+        inputs = []
+        for option_id, name, color, description in options:
+            item = {"name": name, "color": color, "description": description}
+            if option_id:
+                item["id"] = option_id
+            inputs.append(item)
+        return self.graphql(query, {"f": field_id, "o": inputs})
 
     def set_project_description(self, project_id, text):
         """Set the project's short description (the board's "last checked" stamp lives there)."""

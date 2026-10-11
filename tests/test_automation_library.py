@@ -162,9 +162,9 @@ class ChangelogTests(unittest.TestCase):
         final = {str(s.version): s for s in sections if s.kind == "final"}
         self.assertEqual(final["V0.1.0"].version.number(), 10000)
         self.assertEqual(final["V0.14.2"].version.number(), 140020)
-        self.assertEqual(final["V0.14.2"].ticket_numbers(), [])  # history from before the standard has REF blocks only
-        self.assertEqual(final["V0.14.1"].last_build(), "20260911203000")
-        self.assertEqual(final["V0.1.0"].ticket_numbers(), [])
+        self.assertEqual(final["V0.14.2"].ticket_numbers(), [])  # its change had no ticket: a REF block
+        self.assertEqual(final["V0.14.1"].last_build(), "20260911184736")  # the UTC time of commit b6f5c5b
+        self.assertEqual(final["V0.1.0"].ticket_numbers(), [46, 47, 48])
 
 
 class FakeTransport:

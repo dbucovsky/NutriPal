@@ -163,3 +163,58 @@ Not yet verified live: finalize and hotfix against a real merge, a new Alert or 
 - Issue bodies contain garbled dashes from the migration. Not changed.
 - The old board (project 2) was unlinked from the repository and closed.
 - The `All` view's sort and "Show hierarchy" setting are still to be made by hand.
+
+## Live checks (2026-10-10)
+
+- **Preflight passed** with the real `PROJECT_TOKEN`: repository reachable, token works, board #6 identified, all 17
+  fields present, no warnings.
+- **`PROJECT_TOKEN` expires on 2027-01-08.** The preflight only warns inside its run log when 14 days or fewer remain
+  (`EXPIRY_WARNING_DAYS` in `preflight.py`); nothing notifies the owner, because a run with only a warning ends green.
+  The owner keeps their own reminder and renews it before the date (bootstrap guide, section 4).
+- **The first real finalize worked.** With dry run off, the workflow pushed `Finalize V0.15.2` to `main` (protected,
+  administrator bypass open), created and closed the Version ticket #157 and set its board fields, including
+  `Ticket type` *Version*. Not yet seen live: an Alert, a normal pull request whose tickets drive the bump, the
+  scheduled run, and release, hotfix and retire.
+- **Open board questions** (raised by the owner after looking at the board):
+  - The Versions view groups by Parent issue, and every backfilled ticket shows under "No Parent issue", because no
+    Version tickets exist for V0.0.0 to V0.15.1.
+  - Build is empty on the 136 backfilled tickets (they have a Version but were never built by the hooks).
+  - Most option values are gray: `fields.py` only colors the Attention values (`OPTION_COLORS` in `preflight.py`).
+
+## Option colors (2026-10-10, ticket #158)
+
+- Added to the project, not in the standard: `.github/scripts/option_styles.py` (applies the colors and descriptions to an
+  existing board), `OPTION_COLORS` for every option and `OPTION_DESCRIPTIONS` in `preflight.py`, `fields.py` and
+  `github_api.py` (`create_field` takes a description; `set_options`), `tests/test_option_styles.py` and a change to
+  `tests/test_fields.py`. The manifest was rewritten (60 files). The full list is in
+  `doc/2026-10-10_board-option-colors.md`.
+- GitHub clears a ticket's value when a field's options are replaced without their ids; with the ids the value is kept.
+  Shown on a scratch board (deleted), and on the real board by comparing all 154 items before and after.
+- Several options share a color across fields (for example Delivery *Pushed* and *Implemented* are both green); each
+  field has its own column, so the owner kept them.
+
+## Parents and Build for the backfilled tickets (2026-10-10, ticket #206)
+
+- **Version tickets for the history.** One closed Version ticket per historical version that has tickets (47, #159 to
+  #205, Version 0.0.0 to Version 0.14.1), made with the automation's `record_version_ticket`, each with the version's
+  tickets as sub-issues and the board fields Ticket type *Version*, Delivery *Merged*, Version, Version# and Build. The
+  Versions view now groups the 136 shipped tickets by version. The 14 open and 2 abandoned tickets have no version and
+  so no parent. Their creation dates are 2026-10-10 (GitHub cannot backdate); the original finalize time is in each body.
+- **Build on the shipped tickets.** Set on all 136 to the build stamp of their version's changelog block. These stamps
+  come from the converted history headings, not from real commit stamps, so they identify the version but not a commit;
+  V0.11.0 and V0.12.0 share one stamp (same minute).
+- **Not done:** Build on the 16 tickets without a version, and Version tickets for versions that have no tickets
+  (V0.14.2, V0.15.0, V0.15.1).
+
+## History rebuilt with real commits (2026-10-10, ticket #207)
+
+- Supersedes the earlier "I1 reduced" note and the Build values of #206. The history in `CHANGELOG.md` now has one
+  `#### #N — title` block per ticket (136, one per shipped ticket) and one `### Build <commit UTC time> (branch main,
+  commit <hash>)` per commit, instead of one synthetic build per version with a REF wrapper. The version-to-commit
+  mapping is in a comment on #207: a version takes the first commit whose subject version is at or above it, so versions
+  without a commit of their own share the next one.
+- The Build field of the 136 tickets and the 47 Version tickets was redone from these stamps, so a ticket's Build is the UTC
+  time of a real commit. Version headings keep the times of the old manual headings (converted to UTC), which can differ
+  from the commit times.
+- Still approximate: a version that shares a commit with others reports that commit for all of them; V0.13.0's two commits
+  were assigned to tickets by their titles; commit `6b799ea` (the issues migration) is in no version.
