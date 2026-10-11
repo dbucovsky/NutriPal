@@ -45,7 +45,7 @@ def create(run, project_client, board, missing):
     """Create each missing field. Returns the names created (or that would be, in a dry run)."""
     created = []
     for name, kind, values in missing:
-        options = [(value, preflight.OPTION_COLORS.get(value, "GRAY")) for value in values]
+        options = [(value, preflight.OPTION_COLORS.get(value, "GRAY"), preflight.OPTION_DESCRIPTIONS.get(value, "")) for value in values]
         shown = f"{name} ({kind}" + (f": {', '.join(values)}" if values else "") + ")"
         run.do(f"create the field {shown}", project_client.create_field, board.id, name, kind, options)
         created.append(name)

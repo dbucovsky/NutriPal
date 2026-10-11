@@ -75,9 +75,9 @@ class CreateTests(unittest.TestCase):
                    ("Size", "SINGLE_SELECT", ["XS", "S"])]
         fields.create(run, project, full_board(), missing)
         self.assertEqual(project.created[0], ("P7", "Fix", "TEXT", []))
-        colours = dict(project.created[1][3])
+        colours = {name: colour for name, colour, _ in project.created[1][3]}
         self.assertEqual(colours, {"Fine": "GREEN", "Acknowledged": "PURPLE", "Watch": "YELLOW", "Caution": "ORANGE", "AtRisk": "RED"})
-        self.assertEqual(project.created[2][3], [("XS", "GRAY"), ("S", "GRAY")])
+        self.assertEqual([(n, c) for n, c, _ in project.created[2][3]], [("XS", "GREEN"), ("S", "BLUE")])
         self.assertIn("create the field Size (SINGLE_SELECT: XS, S)", run.log)
 
 
